@@ -7,7 +7,7 @@ use crate::types::{ExecType, ExecutionId, OrderId, OrderStatus};
 use rust_decimal::Decimal;
 
 /// Execution report (charter).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionReport {
     pub order_id: OrderId,
     pub exec_id: ExecutionId,
@@ -22,7 +22,7 @@ pub struct ExecutionReport {
 }
 
 /// Trade (charter).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Trade {
     pub trade_id: crate::types::TradeId,
     pub instrument_id: crate::types::InstrumentId,

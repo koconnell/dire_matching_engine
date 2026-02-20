@@ -6,41 +6,41 @@
 use rust_decimal::Decimal;
 
 /// Unique order identifier (internal).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct OrderId(pub u64);
 
 /// Execution report identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ExecutionId(pub u64);
 
 /// Trade identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TradeId(pub u64);
 
 /// Instrument identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct InstrumentId(pub u64);
 
 /// Trader identifier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct TraderId(pub u64);
 
 /// Order side.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Side {
     Buy,
     Sell,
 }
 
 /// Order type: limit (with price) or market (take best available).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderType {
     Limit,
     Market,
 }
 
 /// Time-in-force: how long the order stays active.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TimeInForce {
     /// Good-Till-Cancel: rest on book until filled or canceled.
     GTC,
@@ -51,7 +51,7 @@ pub enum TimeInForce {
 }
 
 /// Order lifecycle status in execution reports.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OrderStatus {
     New,
     PartiallyFilled,
@@ -61,7 +61,7 @@ pub enum OrderStatus {
 }
 
 /// Execution report type (FIX-style).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ExecType {
     New,
     PartialFill,
@@ -73,7 +73,7 @@ pub enum ExecType {
 /// Order message (charter).
 ///
 /// For limit orders, `price` must be `Some(...)`. For market orders, `price` is `None`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Order {
     pub order_id: OrderId,
     pub client_order_id: String,

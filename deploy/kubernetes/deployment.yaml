@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dire-matching-engine
+  labels:
+    app: dire-matching-engine
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: dire-matching-engine
+  template:
+    metadata:
+      labels:
+        app: dire-matching-engine
+    spec:
+      containers:
+        - name: matching-engine
+          image: dire-matching-engine:latest   # override when pushing to GCR/GAR
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: PORT
+              value: "8080"
+            - name: INSTRUMENT_ID
+              value: "1"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "500m"
