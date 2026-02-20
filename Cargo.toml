@@ -1,0 +1,13 @@
+[package]
+name = "dire_matching_engine"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance, deterministic backend matching engine"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rust_decimal = "1.36"
+
+[dev-dependencies]
+# for property-based or deterministic tests later
+# proptest = "1.5"
