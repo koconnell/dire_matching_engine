@@ -81,6 +81,16 @@
 
 ---
 
+## Deploy to GKE
+
+- **Build and push:** Run `./deploy/deploy-gcp.sh GCP_PROJECT [GCP_REGION] [GKE_CLUSTER]` (or set env vars). Script builds the Docker image, pushes to Artifact Registry, and applies Kubernetes manifests.
+- **Manifests:** Deployment, Service (LoadBalancer), and HPA under `deploy/kubernetes/`. Rollout wait uses `--timeout=300s`.
+- **External access:** After deploy, get the external IP with `kubectl get svc dire-matching-engine`. LoadBalancer ingress may take 1–2 minutes to show an IP; check `kubectl describe svc dire-matching-engine` for **LoadBalancer Ingress** if EXTERNAL-IP is pending.
+- **Verify:** `curl http://<EXTERNAL-IP>/health` should return `ok`; POST orders to `http://<EXTERNAL-IP>/order`.
+- **Console:** In GCP Console, select **Kubernetes Engine → Clusters**, click the cluster, then **Workloads** to see the deployment and pods.
+
+---
+
 ## Next phase
 
 After Phase 1 sign-off, proceed to **Phase 2: Protocol Layer** (or, if you prefer, the **synthetic market data** story as the first slice of Phase 4 for deterministic testing and demos).

@@ -78,7 +78,20 @@ From `phase_1_plan.md`:
 
 ---
 
-## 7. Optional (if you have time)
+## 7. Deploy to GKE
+
+- [ ] **Run deploy script**  
+  `./deploy/deploy-gcp.sh GCP_PROJECT [GCP_REGION] [GKE_CLUSTER]` (or set `GCP_PROJECT`, `GCP_REGION`, `GKE_CLUSTER`). Builds image, pushes to Artifact Registry, applies manifests, waits for rollout (300s).
+- [ ] **Service is LoadBalancer**  
+  `deploy/kubernetes/service.yaml` uses `type: LoadBalancer`. Get external IP: `kubectl get svc dire-matching-engine` (or `kubectl describe svc dire-matching-engine` for LoadBalancer Ingress if EXTERNAL-IP is pending).
+- [ ] **Health check**  
+  `curl http://<EXTERNAL-IP>/health` returns `ok`.
+- [ ] **Workloads in GCP Console**  
+  Kubernetes Engine → Clusters → select cluster → **Workloads**; confirm deployment and pods for `dire-matching-engine`.
+
+---
+
+## 8. Optional (if you have time)
 
 - **Property-based test**  
   Use `proptest`: generate random order streams, run through engine, assert invariants (e.g. no crossed book, quantity conservation). Charter mentions this in Phase 4; a single invariant test in Phase 1 is a nice head start.
