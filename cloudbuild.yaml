@@ -10,10 +10,17 @@
 #   Then: Cloud Build → Submit build → choose repo + branch, set config to cloudbuild.yaml.
 #   Or create a trigger so each push runs this build automatically.
 #
+# Deploy to GKE from a trigger: set substitution variables in the trigger:
+#   _GKE_CLUSTER = your cluster name (e.g. dire-matching-engine)
+#   _GKE_REGION  = cluster region (e.g. us-central1)
+# Leave _GKE_CLUSTER empty to skip deploy (tests + build + push only).
+#
 substitutions:
   _REGION: us-central1
   _REPO_NAME: dire-matching-engine
   _IMAGE_TAG: latest
+  _GKE_CLUSTER: ""
+  _GKE_REGION: us-central1
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -36,6 +43,39 @@ steps:
       - -t
       - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/dire-matching-engine:${_IMAGE_TAG}
       - .
+
+  # Step 3a: fetch GKE credentials (writes kubeconfig to /workspace for step 3b). Skipped if _GKE_CLUSTER not set.
+  - name: gcr.io/cloud-builders/gcloud
+    id: deploy-auth
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ -z "${_GKE_CLUSTER}" ]; then
+          echo "Skipping GKE deploy (_GKE_CLUSTER not set). Set it in the trigger to deploy."
+          exit 0
+        fi
+        gcloud container clusters get-credentials "${_GKE_CLUSTER}" \
+          --region="${_GKE_REGION}" \
+          --project="${PROJECT_ID}"
+        mkdir -p /workspace/.kube
+        cp $$HOME/.kube/config /workspace/.kube/config
+  # Step 3b: update deployment and wait for rollout
+  - name: gcr.io/cloud-builders/kubectl
+    id: deploy
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ ! -f /workspace/.kube/config ]; then
+          echo "No kubeconfig; skipping kubectl step."
+          exit 0
+        fi
+        export KUBECONFIG=/workspace/.kube/config
+        kubectl set image deployment/dire-matching-engine \
+          matching-engine=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/dire-matching-engine:${_IMAGE_TAG}
+        kubectl rollout status deployment/dire-matching-engine --timeout=300s
+        echo "Deployed to GKE cluster ${_GKE_CLUSTER}"
 
 images:
   - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/dire-matching-engine:${_IMAGE_TAG}
