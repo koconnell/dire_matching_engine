@@ -6,42 +6,42 @@ Things to do (or confirm) before starting Phase 2. Order is a suggestion.
 
 ## 1. Modify order
 
-- [ ] **Implement modify**  
+- [x] **Implement modify**  
   Charter requires “Modify requests.” Typical approach: **cancel by `OrderId` then add** the new order (same or new id). Preserve price-time semantics (modified order goes to the back of its price level).
-- [ ] **API**  
-  e.g. `modify_order(&mut self, order_id: OrderId, new_price: Decimal, new_quantity: Decimal) -> Result<(), String>`, or accept a replacement `Order` and treat as cancel+add.
-- [ ] **Test**  
-  Add order → modify price or size → verify book state and (if you run matching) execution reports.
+- [x] **API**  
+  `Engine::modify_order(order_id, replacement) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String>`: cancel then run matching on replacement; remainder rests at back of price level.
+- [x] **Test**  
+  Add order → modify price or size → verify book state and execution reports (`engine_modify_order_*` tests).
 
 ---
 
 ## 2. Unit tests (aim for >90% coverage on book + matching)
 
-- [ ] **IOC**  
-  Order that cannot be fully filled is canceled; no remainder on book; one Canceled report.
-- [ ] **FOK**  
-  Order that cannot be fully filled gets no fills and one Canceled report.
-- [ ] **Self-trade**  
-  Two orders, same `TraderId`, crossing: they do **not** match each other; resting order stays on book.
-- [ ] **Price-time priority**  
-  Two resting orders at same price; aggressor matches against the **first** (earlier) resting order.
-- [ ] **Cancel resting**  
-  Add order → cancel by `OrderId` → book no longer has that order (you may already cover this in `add_and_cancel_order`; if so, just confirm).
-- [ ] **Market order**  
-  Buy/sell with no price; takes liquidity at best ask/bid and produces expected trades/reports.
-- [ ] **Modify**  
-  Once implemented: add → modify → verify book; optionally run matching and check reports.
+- [x] **IOC**  
+  Order that cannot be fully filled is canceled; no remainder on book; one Canceled report. (`ioc_no_liquidity_canceled_one_report`, `ioc_partial_fill_remainder_not_on_book`)
+- [x] **FOK**  
+  Order that cannot be fully filled gets no fills and one Canceled report. (`fok_insufficient_liquidity_no_fill_canceled`, `fok_sell_insufficient_liquidity_no_fill_canceled`)
+- [x] **Self-trade**  
+  Two orders, same `TraderId`, crossing: they do **not** match each other; resting order stays on book. (`self_trade_does_not_match`)
+- [x] **Price-time priority**  
+  Two resting orders at same price; aggressor matches against the **first** (earlier) resting order. (`price_time_priority_matches_earlier_order_first`)
+- [x] **Cancel resting**  
+  Add order → cancel by `OrderId` → book no longer has that order. (`add_and_cancel_order`, `engine_order_flow_submit_then_cancel` with `best_ask().is_none()`)
+- [x] **Market order**  
+  Buy/sell with no price; takes liquidity at best ask/bid and produces expected trades/reports. (`market_order_takes_liquidity`)
+- [x] **Modify**  
+  Add → modify → verify book and execution reports; modify then incoming matches. (`engine_modify_order_*`, `engine_modify_then_incoming_matches`, order_book `modify_order_*`)
 
 ---
 
 ## 3. Edge cases and invariants
 
-- [ ] **Invalid order**  
-  Limit order with `price: None` is rejected (you already return `Err` from `add_order`; add a test that expects `Err`).
-- [ ] **No crossed book**  
-  After any match, `best_bid < best_ask` (or one side empty). Add a test that runs a few matches and asserts this.
-- [ ] **No negative quantities**  
-  All `ExecutionReport` and `Trade` quantities ≥ 0. Can be a short test or property.
+- [x] **Invalid order**  
+  Limit order with `price: None` is rejected. Engine returns `Err` in `submit_order`; order_book `add_order` returns `Err`. (`engine_submit_order_limit_without_price_rejected`, `add_order_limit_without_price_returns_err`)
+- [x] **No crossed book**  
+  After any match, `best_bid < best_ask` (or one side empty). (`invariant_no_crossed_book_after_matching`)
+- [x] **No negative quantities**  
+  All `ExecutionReport` and `Trade` quantities ≥ 0. (`invariant_no_negative_quantities_in_trades_and_reports`)
 
 ---
 
@@ -69,12 +69,14 @@ Things to do (or confirm) before starting Phase 2. Order is a suggestion.
 
 From `phase_1_plan.md`:
 
-- [ ] All core types and IDs defined and used consistently.
-- [ ] Order book supports add, cancel, **modify** with correct price-time ordering.
-- [ ] Matching implements price-time priority and produces trades and execution reports.
-- [ ] GTC / IOC / FOK behave correctly.
-- [ ] Unit test coverage for order book and matching is **> 90%**.
-- [ ] No crossed book after matching; no negative quantities; execution reports match charter schema.
+- [x] All core types and IDs defined and used consistently. (`types.rs`: OrderId, ExecutionId, TradeId, InstrumentId, TraderId, Side, OrderType, TimeInForce, OrderStatus, ExecType, Order; used across engine, order_book, matching, execution.)
+- [x] Order book supports add, cancel, **modify** with correct price-time ordering. (§1, order_book tests.)
+- [x] Matching implements price-time priority and produces trades and execution reports. (`matching.rs`, `execution.rs`, §2 tests.)
+- [x] GTC / IOC / FOK behave correctly. (IOC/FOK/GTC covered in §2 unit tests.)
+- [x] Unit test coverage for order book and matching is **> 90%**. (§4: order_book 91%, matching 96%, total 93%.)
+- [x] No crossed book after matching; no negative quantities; execution reports match charter schema. (§3: `invariant_no_crossed_book_after_matching`, `invariant_no_negative_quantities_in_trades_and_reports`; `ExecutionReport`/`Trade` fields align with charter.)
+
+**Phase 1 sign-off:** All definition-of-done items are satisfied. Ready to start **Phase 2: Protocol Layer** (FIX, REST, WebSocket).
 
 ---
 

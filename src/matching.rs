@@ -292,6 +292,22 @@ mod tests {
     }
 
     #[test]
+    fn ioc_no_liquidity_canceled_one_report() {
+        let mut book = OrderBook::new(InstrumentId(1));
+        let buy_ioc = order(1, Side::Buy, 10, Some(100), TimeInForce::IOC, 1);
+        let (trades, reports) = match_order(&mut book, &buy_ioc, 1, 1);
+        assert!(trades.is_empty(), "IOC with no liquidity: no fills");
+        assert!(book.best_bid().is_none(), "no remainder on book");
+        let canceled = reports
+            .iter()
+            .find(|r| r.exec_type == ExecType::Canceled)
+            .expect("one Canceled report");
+        assert_eq!(canceled.order_id, OrderId(1));
+        assert_eq!(canceled.filled_quantity, Decimal::ZERO);
+        assert_eq!(canceled.remaining_quantity, Decimal::from(10));
+    }
+
+    #[test]
     fn ioc_partial_fill_remainder_not_on_book() {
         let mut book = OrderBook::new(InstrumentId(1));
         book.add_order(&order(1, Side::Sell, 5, Some(100), TimeInForce::GTC, 1))
@@ -303,7 +319,7 @@ mod tests {
         assert_eq!(trades[0].price, Decimal::from(100));
         // IOC: aggressor remainder (5) must not be on book
         assert!(book.best_bid().is_none());
-        // Aggressor report: filled 5, remaining 5 (canceled)
+        // Aggressor report: filled 5, remaining 5 (canceled, not rested)
         let aggressor = reports
             .iter()
             .find(|r| r.order_id == OrderId(2))

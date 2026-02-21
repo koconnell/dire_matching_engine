@@ -49,6 +49,9 @@ impl Engine {
                 "Order instrument does not match engine instrument"
             ));
         }
+        if order.is_limit() && order.price.is_none() {
+            return Err("Limit order must have price".into());
+        }
         let (trades, reports) = match_order(
             &mut self.book,
             &order,
@@ -89,17 +92,58 @@ impl Engine {
         removed
     }
 
-    /// Modifies an order: cancel by `order_id`, then add the replacement.
-    /// Replacement may use the same or a new order id.
+    /// Modifies an order: cancel by `order_id`, then run matching on the replacement.
+    /// Replacement may use the same or a new order id. Price-time is preserved: any
+    /// resting quantity from the replacement goes to the back of its price level.
+    /// Returns trades and execution reports from matching the replacement.
     pub fn modify_order(
         &mut self,
         order_id: crate::types::OrderId,
         replacement: &Order,
-    ) -> Result<(), String> {
+    ) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String> {
         if replacement.instrument_id != self.instrument_id {
             return Err("Replacement order must be for the same instrument".into());
         }
-        self.book.modify_order(order_id, replacement)
+        if !self.book.cancel_order(order_id) {
+            return Err(format!("Order {} not found", order_id.0));
+        }
+        info!(
+            "order modified old_order_id={} replacement order_id={} side={:?} quantity={} price={:?}",
+            order_id.0,
+            replacement.order_id.0,
+            replacement.side,
+            replacement.quantity,
+            replacement.price
+        );
+        let (trades, reports) = match_order(
+            &mut self.book,
+            replacement,
+            self.next_trade_id,
+            self.next_exec_id,
+        );
+        for report in &reports {
+            info!(
+                "execution_report order_id={} exec_type={:?} order_status={:?} filled={} remaining={}",
+                report.order_id.0,
+                report.exec_type,
+                report.order_status,
+                report.filled_quantity,
+                report.remaining_quantity
+            );
+        }
+        for trade in &trades {
+            info!(
+                "trade trade_id={} buy_order={} sell_order={} price={} quantity={}",
+                trade.trade_id.0,
+                trade.buy_order_id.0,
+                trade.sell_order_id.0,
+                trade.price,
+                trade.quantity
+            );
+        }
+        self.next_trade_id += trades.len() as u64;
+        self.next_exec_id += reports.len() as u64;
+        Ok((trades, reports))
     }
 
     /// Returns the instrument this engine handles.
@@ -183,6 +227,26 @@ mod tests {
     }
 
     #[test]
+    fn engine_submit_order_limit_without_price_rejected() {
+        init_log();
+        let mut engine = Engine::new(InstrumentId(1));
+        let order = Order {
+            order_id: OrderId(1),
+            client_order_id: "c1".into(),
+            instrument_id: InstrumentId(1),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: Decimal::from(10),
+            price: None,
+            time_in_force: TimeInForce::GTC,
+            timestamp: 1,
+            trader_id: TraderId(1),
+        };
+        let err = engine.submit_order(order).unwrap_err();
+        assert!(err.to_lowercase().contains("price"));
+    }
+
+    #[test]
     fn engine_order_flow_submit_then_cancel() {
         init_log();
         let mut engine = Engine::new(InstrumentId(1));
@@ -201,5 +265,143 @@ mod tests {
         engine.submit_order(sell).unwrap();
         let canceled = engine.cancel_order(OrderId(1));
         assert!(canceled);
+        assert!(engine.best_ask().is_none(), "cancel resting: book no longer has that order");
+    }
+
+    #[test]
+    fn engine_modify_then_incoming_matches() {
+        init_log();
+        let mut engine = Engine::new(InstrumentId(1));
+        let sell = Order {
+            order_id: OrderId(1),
+            client_order_id: "c1".into(),
+            instrument_id: InstrumentId(1),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: Decimal::from(10),
+            price: Some(Decimal::from(100)),
+            time_in_force: TimeInForce::GTC,
+            timestamp: 1,
+            trader_id: TraderId(1),
+        };
+        engine.submit_order(sell).unwrap();
+        let replacement = Order {
+            order_id: OrderId(1),
+            client_order_id: "c1".into(),
+            instrument_id: InstrumentId(1),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: Decimal::from(5),
+            price: Some(Decimal::from(100)),
+            time_in_force: TimeInForce::GTC,
+            timestamp: 2,
+            trader_id: TraderId(1),
+        };
+        engine.modify_order(OrderId(1), &replacement).unwrap();
+        let buy = Order {
+            order_id: OrderId(2),
+            client_order_id: "c2".into(),
+            instrument_id: InstrumentId(1),
+            side: Side::Buy,
+            order_type: OrderType::Limit,
+            quantity: Decimal::from(5),
+            price: Some(Decimal::from(100)),
+            time_in_force: TimeInForce::GTC,
+            timestamp: 3,
+            trader_id: TraderId(2),
+        };
+        let (trades, _) = engine.submit_order(buy).unwrap();
+        assert_eq!(trades.len(), 1);
+        assert_eq!(trades[0].quantity, Decimal::from(5));
+        assert!(engine.best_ask().is_none());
+        assert!(engine.best_bid().is_none());
+    }
+
+    #[test]
+    fn engine_modify_order_replacement_rests_and_returns_reports() {
+        init_log();
+        let mut engine = Engine::new(InstrumentId(1));
+        let sell = Order {
+            order_id: OrderId(1),
+            client_order_id: "c1".into(),
+            instrument_id: InstrumentId(1),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: Decimal::from(10),
+            price: Some(Decimal::from(100)),
+            time_in_force: TimeInForce::GTC,
+            timestamp: 1,
+            trader_id: TraderId(1),
+        };
+        engine.submit_order(sell).unwrap();
+        let replacement = Order {
+            order_id: OrderId(1),
+            client_order_id: "c1".into(),
+            instrument_id: InstrumentId(1),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: Decimal::from(5),
+            price: Some(Decimal::from(100)),
+            time_in_force: TimeInForce::GTC,
+            timestamp: 2,
+            trader_id: TraderId(1),
+        };
+        let (trades, reports) = engine.modify_order(OrderId(1), &replacement).unwrap();
+        assert_eq!(trades.len(), 0);
+        assert!(!reports.is_empty());
+        assert_eq!(engine.best_ask(), Some(Decimal::from(100)));
+    }
+
+    #[test]
+    fn engine_modify_order_not_found_returns_err() {
+        init_log();
+        let mut engine = Engine::new(InstrumentId(1));
+        let replacement = Order {
+            order_id: OrderId(2),
+            client_order_id: "c2".into(),
+            instrument_id: InstrumentId(1),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: Decimal::from(5),
+            price: Some(Decimal::from(100)),
+            time_in_force: TimeInForce::GTC,
+            timestamp: 1,
+            trader_id: TraderId(1),
+        };
+        let err = engine.modify_order(OrderId(999), &replacement).unwrap_err();
+        assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn engine_modify_order_wrong_instrument_returns_err() {
+        init_log();
+        let mut engine = Engine::new(InstrumentId(1));
+        let sell = Order {
+            order_id: OrderId(1),
+            client_order_id: "c1".into(),
+            instrument_id: InstrumentId(1),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: Decimal::from(10),
+            price: Some(Decimal::from(100)),
+            time_in_force: TimeInForce::GTC,
+            timestamp: 1,
+            trader_id: TraderId(1),
+        };
+        engine.submit_order(sell).unwrap();
+        let replacement = Order {
+            order_id: OrderId(1),
+            client_order_id: "c1".into(),
+            instrument_id: InstrumentId(2),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: Decimal::from(5),
+            price: Some(Decimal::from(100)),
+            time_in_force: TimeInForce::GTC,
+            timestamp: 2,
+            trader_id: TraderId(1),
+        };
+        let err = engine.modify_order(OrderId(1), &replacement).unwrap_err();
+        assert!(err.contains("same instrument"));
     }
 }

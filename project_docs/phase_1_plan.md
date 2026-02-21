@@ -72,12 +72,12 @@
 
 ## Definition of done (Phase 1)
 
-- [ ] All core types and IDs defined and used consistently.
-- [ ] Order book supports add, cancel, modify with correct price-time ordering.
-- [ ] Matching implements price-time priority and produces trades and execution reports.
-- [ ] GTC/IOC/FOK (and any other in-scope TIF) behave correctly.
-- [ ] Unit test coverage for order book and matching is > 90%.
-- [ ] No crossed book after matching; no negative quantities; execution reports match charter schema.
+- [x] All core types and IDs defined and used consistently.
+- [x] Order book supports add, cancel, modify with correct price-time ordering.
+- [x] Matching implements price-time priority and produces trades and execution reports.
+- [x] GTC/IOC/FOK (and any other in-scope TIF) behave correctly.
+- [x] Unit test coverage for order book and matching is > 90%.
+- [x] No crossed book after matching; no negative quantities; execution reports match charter schema.
 
 ---
 
