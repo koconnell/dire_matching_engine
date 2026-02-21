@@ -1,0 +1,41 @@
+# Cloud Build: run tests, then build and push the Docker image.
+# View runs and test output: GCP Console → Cloud Build → History.
+#
+# Run from your machine:
+#   gcloud builds submit . --config=cloudbuild.yaml
+#   Or: ./deploy/deploy-gcp.sh (with USE_CLOUD_BUILD=1)
+#
+# Run from GCP Console (no local gcloud):
+#   Push code to a repo connected to GCP (GitHub, Cloud Source Repositories).
+#   Then: Cloud Build → Submit build → choose repo + branch, set config to cloudbuild.yaml.
+#   Or create a trigger so each push runs this build automatically.
+#
+substitutions:
+  _REGION: us-central1
+  _REPO_NAME: dire-matching-engine
+  _IMAGE_TAG: latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  # Step 1: run tests (results + engine logs visible in Cloud Build log)
+  - name: rust:1-bookworm
+    id: test
+    entrypoint: cargo
+    args: ["test"]
+    env:
+      - "RUST_LOG=info"
+    dir: /workspace
+
+  # Step 2: build Docker image (only if tests passed)
+  - name: gcr.io/cloud-builders/docker
+    id: build
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/dire-matching-engine:${_IMAGE_TAG}
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/dire-matching-engine:${_IMAGE_TAG}

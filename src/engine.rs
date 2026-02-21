@@ -7,6 +7,7 @@ use crate::execution::{ExecutionReport, Trade};
 use crate::matching::match_order;
 use crate::order_book::OrderBook;
 use crate::types::{InstrumentId, Order};
+use log::info;
 
 /// Single-instrument matching engine.
 ///
@@ -36,6 +37,13 @@ impl Engine {
     ///
     /// Returns `Err` if the order is for a different instrument.
     pub fn submit_order(&mut self, order: Order) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String> {
+        info!(
+            "order submitted order_id={} side={:?} quantity={} price={:?}",
+            order.order_id.0,
+            order.side,
+            order.quantity,
+            order.price
+        );
         if order.instrument_id != self.instrument_id {
             return Err(format!(
                 "Order instrument does not match engine instrument"
@@ -47,6 +55,26 @@ impl Engine {
             self.next_trade_id,
             self.next_exec_id,
         );
+        for report in &reports {
+            info!(
+                "execution_report order_id={} exec_type={:?} order_status={:?} filled={} remaining={}",
+                report.order_id.0,
+                report.exec_type,
+                report.order_status,
+                report.filled_quantity,
+                report.remaining_quantity
+            );
+        }
+        for trade in &trades {
+            info!(
+                "trade trade_id={} buy_order={} sell_order={} price={} quantity={}",
+                trade.trade_id.0,
+                trade.buy_order_id.0,
+                trade.sell_order_id.0,
+                trade.price,
+                trade.quantity
+            );
+        }
         self.next_trade_id += trades.len() as u64;
         self.next_exec_id += reports.len() as u64;
         Ok((trades, reports))
@@ -54,7 +82,11 @@ impl Engine {
 
     /// Cancels a resting order by id. Returns `true` if the order was found and removed.
     pub fn cancel_order(&mut self, order_id: crate::types::OrderId) -> bool {
-        self.book.cancel_order(order_id)
+        let removed = self.book.cancel_order(order_id);
+        if removed {
+            info!("order canceled order_id={}", order_id.0);
+        }
+        removed
     }
 
     /// Modifies an order: cancel by `order_id`, then add the replacement.
@@ -92,8 +124,13 @@ mod tests {
     use crate::types::{Order, OrderId, OrderType, Side, TimeInForce, TraderId};
     use rust_decimal::Decimal;
 
+    fn init_log() {
+        let _ = env_logger::try_init();
+    }
+
     #[test]
     fn engine_submit_order_matches_and_returns_trades() {
+        init_log();
         let mut engine = Engine::new(InstrumentId(1));
         let sell = Order {
             order_id: OrderId(1),
@@ -128,6 +165,7 @@ mod tests {
 
     #[test]
     fn engine_submit_order_wrong_instrument_returns_err() {
+        init_log();
         let mut engine = Engine::new(InstrumentId(1));
         let order = Order {
             order_id: OrderId(1),
@@ -142,5 +180,26 @@ mod tests {
             trader_id: TraderId(1),
         };
         assert!(engine.submit_order(order).is_err());
+    }
+
+    #[test]
+    fn engine_order_flow_submit_then_cancel() {
+        init_log();
+        let mut engine = Engine::new(InstrumentId(1));
+        let sell = Order {
+            order_id: OrderId(1),
+            client_order_id: "c1".into(),
+            instrument_id: InstrumentId(1),
+            side: Side::Sell,
+            order_type: OrderType::Limit,
+            quantity: Decimal::from(5),
+            price: Some(Decimal::from(100)),
+            time_in_force: TimeInForce::GTC,
+            timestamp: 1,
+            trader_id: TraderId(1),
+        };
+        engine.submit_order(sell).unwrap();
+        let canceled = engine.cancel_order(OrderId(1));
+        assert!(canceled);
     }
 }

@@ -83,7 +83,9 @@
 
 ## Deploy to GKE
 
+- **Prerequisites:** For Cloud Build, enable the API: `gcloud services enable cloudbuild.googleapis.com --project=YOUR_PROJECT`.
 - **Build and push:** Run `./deploy/deploy-gcp.sh GCP_PROJECT [GCP_REGION] [GKE_CLUSTER]` (or set env vars). Script builds the Docker image, pushes to Artifact Registry, and applies Kubernetes manifests.
+- **Run from GCP only:** Push your code to a repo connected to GCP (e.g. GitHub via Cloud Build connection, or Cloud Source Repositories). Then in the Console go to **Cloud Build → Submit build**, choose that repo and branch, set the config file to `cloudbuild.yaml`, and run. Tests and build run in GCP; view logs in **Cloud Build → History**. To deploy to GKE after the build, run `kubectl set image ...` from your machine, or add a deploy step to the trigger.
 - **Manifests:** Deployment, Service (LoadBalancer), and HPA under `deploy/kubernetes/`. Rollout wait uses `--timeout=300s`.
 - **External access:** After deploy, get the external IP with `kubectl get svc dire-matching-engine`. LoadBalancer ingress may take 1–2 minutes to show an IP; check `kubectl describe svc dire-matching-engine` for **LoadBalancer Ingress** if EXTERNAL-IP is pending.
 - **Verify:** `curl http://<EXTERNAL-IP>/health` should return `ok`; POST orders to `http://<EXTERNAL-IP>/order`.

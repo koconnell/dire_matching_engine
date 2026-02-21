@@ -20,6 +20,7 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+    let _ = env_logger::try_init();
     let instrument_id = InstrumentId(
         std::env::var("INSTRUMENT_ID")
             .ok()

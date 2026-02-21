@@ -81,7 +81,10 @@ From `phase_1_plan.md`:
 ## 7. Deploy to GKE
 
 - [ ] **Run deploy script**  
-  `./deploy/deploy-gcp.sh GCP_PROJECT [GCP_REGION] [GKE_CLUSTER]` (or set `GCP_PROJECT`, `GCP_REGION`, `GKE_CLUSTER`). Builds image, pushes to Artifact Registry, applies manifests, waits for rollout (300s).
+  `./deploy/deploy-gcp.sh GCP_PROJECT [GCP_REGION] [GKE_CLUSTER]` (or set `GCP_PROJECT`, `GCP_REGION`, `GKE_CLUSTER`). Builds image, pushes to Artifact Registry, applies manifests, waits for rollout (300s).  
+  To run tests in GCP and see them in the console: `USE_CLOUD_BUILD=1 ./deploy/deploy-gcp.sh ...`; then open **Cloud Build → History** and click a build to see the **test** step log.  
+  **Prerequisite for Cloud Build:** enable the API: `gcloud services enable cloudbuild.googleapis.com --project=YOUR_PROJECT`.  
+  **Run from GCP only:** Push code to a repo connected to GCP (GitHub or Cloud Source Repositories), then **Cloud Build → Submit build** → choose repo + branch, set config to `cloudbuild.yaml`. Or create a **Trigger** so each push runs the build automatically.
 - [ ] **Service is LoadBalancer**  
   `deploy/kubernetes/service.yaml` uses `type: LoadBalancer`. Get external IP: `kubectl get svc dire-matching-engine` (or `kubectl describe svc dire-matching-engine` for LoadBalancer Ingress if EXTERNAL-IP is pending).
 - [ ] **Health check**  
