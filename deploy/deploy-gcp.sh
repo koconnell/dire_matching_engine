@@ -40,9 +40,9 @@ if [[ -n "$GKE_CLUSTER" ]]; then
 
   echo "Updating deployment image..."
   kubectl set image deployment/dire-matching-engine matching-engine="$IMAGE_NAME" --record
-  kubectl rollout status deployment/dire-matching-engine --timeout=120s
+  kubectl rollout status deployment/dire-matching-engine --timeout=300s
 
-  echo "Done. Service: dire-matching-engine (ClusterIP). Get endpoints: kubectl get svc dire-matching-engine"
+  echo "Done. Service: dire-matching-engine (LoadBalancer). Get external IP: kubectl get svc dire-matching-engine"
 else
   echo "Skipping deploy (no GKE_CLUSTER). Image: $IMAGE_NAME"
   echo "To deploy: kubectl set image deployment/dire-matching-engine matching-engine=$IMAGE_NAME"
