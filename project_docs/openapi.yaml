@@ -1,0 +1,243 @@
+openapi: 3.0.3
+info:
+  title: Dire Matching Engine API
+  description: REST API for order submission, cancel, and modify (Phase 2).
+  version: 0.2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local
+
+paths:
+  /health:
+    get:
+      summary: Health check
+      operationId: health
+      responses:
+        "200":
+          description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /orders:
+    post:
+      summary: Submit order
+      operationId: submitOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Order"
+      responses:
+        "200":
+          description: Order accepted; returns trades and execution reports
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitResponse"
+        "400":
+          description: Invalid order (e.g. wrong instrument, limit without price)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /orders/cancel:
+    post:
+      summary: Cancel order
+      operationId: cancelOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelRequest"
+      responses:
+        "200":
+          description: Cancel result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelResponse"
+
+  /orders/modify:
+    post:
+      summary: Modify order (cancel + replace, then run matching)
+      operationId: modifyOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModifyRequest"
+      responses:
+        "200":
+          description: Modification accepted; returns trades and execution reports for replacement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubmitResponse"
+        "400":
+          description: Order not found or invalid replacement
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /openapi.json:
+    get:
+      summary: OpenAPI specification (JSON)
+      operationId: openapiJson
+      responses:
+        "200":
+          description: OpenAPI 3.0 spec as JSON
+
+components:
+  schemas:
+    Order:
+      type: object
+      required:
+        - order_id
+        - client_order_id
+        - instrument_id
+        - side
+        - order_type
+        - quantity
+        - time_in_force
+        - timestamp
+        - trader_id
+      properties:
+        order_id:
+          type: integer
+          format: u64
+        client_order_id:
+          type: string
+        instrument_id:
+          type: integer
+          format: u64
+        side:
+          type: string
+          enum: [Buy, Sell]
+        order_type:
+          type: string
+          enum: [Limit, Market]
+        quantity:
+          type: string
+          description: Decimal string
+        price:
+          type: string
+          nullable: true
+          description: Required for Limit; null for Market
+        time_in_force:
+          type: string
+          enum: [GTC, IOC, FOK]
+        timestamp:
+          type: integer
+          format: u64
+        trader_id:
+          type: integer
+          format: u64
+
+    CancelRequest:
+      type: object
+      required: [order_id]
+      properties:
+        order_id:
+          type: integer
+          format: u64
+
+    CancelResponse:
+      type: object
+      properties:
+        canceled:
+          type: boolean
+
+    ModifyRequest:
+      type: object
+      required: [order_id, replacement]
+      properties:
+        order_id:
+          type: integer
+          format: u64
+        replacement:
+          $ref: "#/components/schemas/Order"
+
+    SubmitResponse:
+      type: object
+      properties:
+        trades:
+          type: array
+          items:
+            $ref: "#/components/schemas/Trade"
+        reports:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExecutionReport"
+
+    Trade:
+      type: object
+      properties:
+        trade_id:
+          type: integer
+          format: u64
+        instrument_id:
+          type: integer
+          format: u64
+        buy_order_id:
+          type: integer
+          format: u64
+        sell_order_id:
+          type: integer
+          format: u64
+        price:
+          type: string
+        quantity:
+          type: string
+        timestamp:
+          type: integer
+          format: u64
+        aggressor_side:
+          type: string
+          enum: [Buy, Sell]
+
+    ExecutionReport:
+      type: object
+      properties:
+        order_id:
+          type: integer
+          format: u64
+        exec_id:
+          type: integer
+          format: u64
+        exec_type:
+          type: string
+          enum: [New, PartialFill, Fill, Canceled, Rejected]
+        order_status:
+          type: string
+          enum: [New, PartiallyFilled, Filled, Canceled, Rejected]
+        filled_quantity:
+          type: string
+        remaining_quantity:
+          type: string
+        avg_price:
+          type: string
+          nullable: true
+        last_qty:
+          type: string
+          nullable: true
+        last_px:
+          type: string
+          nullable: true
+        timestamp:
+          type: integer
+          format: u64
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string

@@ -37,6 +37,7 @@
 //! You can also use [`OrderBook`] and [`match_order`] directly if you manage
 //! trade/execution IDs yourself.
 
+pub mod api;
 pub mod engine;
 pub mod execution;
 pub mod matching;
