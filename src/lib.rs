@@ -40,11 +40,12 @@
 pub mod api;
 pub mod engine;
 pub mod execution;
+pub mod fix;
 pub mod matching;
 pub mod order_book;
 pub mod types;
 
-pub use engine::Engine;
+pub use engine::{BookSnapshot, Engine, MatchingEngine};
 pub use execution::{ExecutionReport, Trade};
 pub use matching::match_order;
 pub use order_book::{Fill, OrderBook};

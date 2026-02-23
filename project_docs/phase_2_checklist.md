@@ -6,9 +6,9 @@ Work items for Phase 2 in suggested order. Tick as you complete.
 
 ## 1. Protocol abstraction
 
-- [ ] **Service interface**  
+- [x] **Service interface**  
   Document (or trait) the operations adapters use: submit order, cancel, modify, optional book snapshot. Engine already implements these; ensure one clear entry point (e.g. `Engine` or thin wrapper).
-- [ ] **Shared state**  
+- [x] **Shared state**  
   REST and WebSocket share the same `Engine` (e.g. `Arc<Mutex<Engine>>` in `AppState`). FIX adapter will use same engine (in-process or over local API).
 
 ---
@@ -32,20 +32,20 @@ Work items for Phase 2 in suggested order. Tick as you complete.
   e.g. `WS /ws/market-data`; Axum WebSocket upgrade.
 - [x] **Snapshot**  
   On connect, send current book (best bid/ask or full depth) as JSON.
-- [ ] **Updates (optional)**  
+- [x] **Updates (optional)**  
   On trade or book change, broadcast to connected clients (can add in a follow-up slice).
 
 ---
 
 ## 4. FIX 4.4 adapter
 
-- [ ] **Design**  
+- [x] **Design**  
   Choose approach: in-process FIX engine (Rust crate) or sidecar that talks to engine via REST/TCP.
-- [ ] **NewOrderSingle → Engine::submit_order**  
+- [x] **NewOrderSingle → Engine::submit_order**  
   Map FIX message to `Order`; call engine; send ExecutionReport(s) as FIX.
-- [ ] **Cancel / Replace**  
+- [x] **Cancel / Replace**  
   Map to `cancel_order` / `modify_order`; send execution reports.
-- [ ] **QuickFIX test**  
+- [x] **QuickFIX test**  
   Connect with QuickFIX client; submit, cancel, modify; verify execution reports.
 
 ---
@@ -56,19 +56,19 @@ Work items for Phase 2 in suggested order. Tick as you complete.
   `tests/rest_api.rs`: spawn server, then test `GET /health`, `POST /orders`, `POST /orders/cancel`, `POST /orders/modify`; assert status and response shape. Run with `cargo test --test rest_api`.
 - [x] **WebSocket**  
   Test connect and receive snapshot (e.g. with `tokio-tungstenite` or similar).
-- [ ] **FIX**  
+- [x] **FIX**  
   If CI-friendly, add test with stub FIX client or document manual QuickFIX verification.
 
 ---
 
 ## 6. Phase 2 definition of done
 
-- [ ] Protocol abstraction used by REST and WebSocket.
-- [ ] REST: submit, cancel, modify; OpenAPI spec.
-- [ ] WebSocket: market data (snapshot; updates optional).
-- [ ] FIX 4.4: orders and execution reports; QuickFIX-tested.
-- [ ] Integration tests for REST and WebSocket.
+- [x] Protocol abstraction used by REST and WebSocket.
+- [x] REST: submit, cancel, modify; OpenAPI spec.
+- [x] WebSocket: market data (snapshot; updates optional).
+- [x] FIX 4.4: orders and execution reports; QuickFIX-tested.
+- [x] Integration tests for REST and WebSocket.
 
 ---
 
-When the items above are done, you’re in good shape to start **Phase 3: Security & Governance**.
+Phase 2 is complete. Next: **Phase 3: Security & Governance**.

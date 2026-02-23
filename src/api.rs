@@ -14,20 +14,36 @@ use axum::{
     Json, Router,
 };
 use std::sync::Mutex;
+use tokio::sync::broadcast;
 
-use crate::{Engine, InstrumentId, Order, OrderId};
+use crate::{Engine, InstrumentId, MatchingEngine, Order, OrderId};
 
-/// Shared app state: one engine per process.
-#[derive(Clone)]
-pub struct AppState {
-    pub(crate) engine: std::sync::Arc<Mutex<Engine>>,
+/// Payload broadcast to all WebSocket market-data clients when the book changes.
+#[derive(Clone, Debug)]
+pub struct BookUpdate {
+    pub instrument_id: u64,
+    pub best_bid: Option<rust_decimal::Decimal>,
+    pub best_ask: Option<rust_decimal::Decimal>,
 }
 
-/// Builds the REST router with state. Returns `Router<()>` so you can call `.into_make_service()` for `axum::serve`.
-pub fn create_router(instrument_id: InstrumentId) -> Router<()> {
-    let state = AppState {
+/// Shared app state: one engine per process; broadcast channel for market-data updates.
+#[derive(Clone)]
+pub struct AppState {
+    pub engine: std::sync::Arc<Mutex<Engine>>,
+    pub(crate) broadcast_tx: broadcast::Sender<BookUpdate>,
+}
+
+/// Builds shared app state (engine + broadcast). Use this when you need to share the engine with FIX or other adapters.
+pub fn create_app_state(instrument_id: InstrumentId) -> AppState {
+    let (broadcast_tx, _) = broadcast::channel(32);
+    AppState {
         engine: std::sync::Arc::new(Mutex::new(Engine::new(instrument_id))),
-    };
+        broadcast_tx,
+    }
+}
+
+/// Builds the REST/WebSocket router with the given state. Use with [`create_app_state`] when sharing engine with FIX.
+pub fn create_router_with_state(state: AppState) -> Router<()> {
     Router::new()
         .route("/health", get(health))
         .route("/orders", post(submit_order))
@@ -35,6 +51,11 @@ pub fn create_router(instrument_id: InstrumentId) -> Router<()> {
         .route("/orders/modify", post(modify_order))
         .route("/ws/market-data", get(ws_market_data))
         .layer(Extension(state))
+}
+
+/// Builds the REST/WebSocket router with a new state (convenience for tests). Returns `Router<()>` for `axum::serve`.
+pub fn create_router(instrument_id: InstrumentId) -> Router<()> {
+    create_router_with_state(create_app_state(instrument_id))
 }
 
 async fn health() -> impl IntoResponse {
@@ -61,11 +82,12 @@ struct MarketDataSnapshot {
 async fn handle_market_data_socket(state: AppState, mut socket: WebSocket) {
     let snapshot = {
         let guard = state.engine.lock().expect("lock");
+        let book = guard.book_snapshot();
         MarketDataSnapshot {
             msg_type: "snapshot",
-            instrument_id: guard.instrument_id().0,
-            best_bid: guard.best_bid(),
-            best_ask: guard.best_ask(),
+            instrument_id: book.instrument_id.0,
+            best_bid: book.best_bid,
+            best_ask: book.best_ask,
         }
     };
     let json = match serde_json::to_string(&snapshot) {
@@ -75,8 +97,35 @@ async fn handle_market_data_socket(state: AppState, mut socket: WebSocket) {
     if socket.send(Message::Text(json.into())).await.is_err() {
         return;
     }
-    // Keep connection open (e.g. for future broadcast); ignore incoming frames
-    while let Some(Ok(_)) = socket.recv().await {}
+
+    let mut rx = state.broadcast_tx.subscribe();
+    loop {
+        tokio::select! {
+            res = rx.recv() => {
+                match res {
+                    Ok(update) => {
+                        let msg = MarketDataSnapshot {
+                            msg_type: "snapshot",
+                            instrument_id: update.instrument_id,
+                            best_bid: update.best_bid,
+                            best_ask: update.best_ask,
+                        };
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            if socket.send(Message::Text(json.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            msg = socket.recv() => match msg {
+                Some(Ok(_)) => {}
+                _ => break,
+            },
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -90,6 +139,13 @@ async fn cancel_order(
 ) -> Response {
     let mut guard = state.engine.lock().expect("lock");
     let removed = guard.cancel_order(OrderId(body.order_id));
+    let update = BookUpdate {
+        instrument_id: guard.instrument_id().0,
+        best_bid: guard.best_bid(),
+        best_ask: guard.best_ask(),
+    };
+    drop(guard);
+    let _ = state.broadcast_tx.send(update);
     #[derive(serde::Serialize)]
     struct Out {
         canceled: bool,
@@ -109,8 +165,15 @@ async fn modify_order(
 ) -> Response {
     let mut guard = state.engine.lock().expect("lock");
     let order_id = OrderId(body.order_id);
-    match guard.modify_order(order_id, &body.replacement) {
+    let out = match guard.modify_order(order_id, &body.replacement) {
         Ok((trades, reports)) => {
+            let update = BookUpdate {
+                instrument_id: guard.instrument_id().0,
+                best_bid: guard.best_bid(),
+                best_ask: guard.best_ask(),
+            };
+            drop(guard);
+            let _ = state.broadcast_tx.send(update);
             #[derive(serde::Serialize)]
             struct Out {
                 trades: Vec<crate::Trade>,
@@ -123,7 +186,8 @@ async fn modify_order(
             Json(serde_json::json!({ "error": e })),
         )
             .into_response(),
-    }
+    };
+    out
 }
 
 async fn submit_order(
@@ -133,6 +197,13 @@ async fn submit_order(
     let mut guard = state.engine.lock().expect("lock");
     match guard.submit_order(order) {
         Ok((trades, reports)) => {
+            let update = BookUpdate {
+                instrument_id: guard.instrument_id().0,
+                best_bid: guard.best_bid(),
+                best_ask: guard.best_ask(),
+            };
+            drop(guard);
+            let _ = state.broadcast_tx.send(update);
             #[derive(serde::Serialize)]
             struct Out {
                 trades: Vec<crate::Trade>,

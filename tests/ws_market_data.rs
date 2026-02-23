@@ -75,3 +75,43 @@ async fn ws_market_data_snapshot_reflects_book_after_order() {
     let expected_bid: rust_decimal::Decimal = "99.5".parse().unwrap();
     assert_eq!(snapshot.best_bid.unwrap(), expected_bid);
 }
+
+#[tokio::test]
+async fn ws_market_data_broadcasts_update_after_order() {
+    let (addr, _handle) = spawn_app().await;
+    let url = format!("ws://{}/ws/market-data", addr);
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+        .await
+        .expect("connect");
+
+    let raw = ws.next().await.expect("first message").expect("ws recv");
+    let msg = raw.into_text().expect("text frame");
+    let first: MarketDataSnapshot = serde_json::from_str(&msg).expect("json");
+    assert_eq!(first.msg_type, "snapshot");
+    assert!(first.best_bid.is_none());
+
+    let order_url = format!("http://{}/orders", addr);
+    let order = serde_json::json!({
+        "order_id": 20,
+        "client_order_id": "c20",
+        "instrument_id": 1,
+        "side": "Buy",
+        "order_type": "Limit",
+        "quantity": "3",
+        "price": "101",
+        "time_in_force": "GTC",
+        "timestamp": 1,
+        "trader_id": 1
+    });
+    let client = reqwest::Client::new();
+    let _ = client.post(&order_url).json(&order).send().await.unwrap();
+
+    let raw = ws.next().await.expect("second message (broadcast)").expect("ws recv");
+    let msg = raw.into_text().expect("text frame");
+    let second: MarketDataSnapshot = serde_json::from_str(&msg).expect("json");
+    assert_eq!(second.msg_type, "snapshot");
+    assert_eq!(second.instrument_id, 1);
+    assert!(second.best_bid.is_some());
+    let expected_bid: rust_decimal::Decimal = "101".parse().unwrap();
+    assert_eq!(second.best_bid.unwrap(), expected_bid);
+}

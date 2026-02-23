@@ -1,13 +1,94 @@
 //! Single-entry matching engine facade.
 //!
 //! Holds the order book and ID counters so Phase 2 (protocol layer) can submit orders
-//! without managing `OrderBook` and `match_order` directly.
+//! without managing `OrderBook` and `match_order` directly. All protocol adapters (REST,
+//! WebSocket, FIX) use the same entry point: [`Engine`] behind shared state ([`crate::api::AppState`]).
 
 use crate::execution::{ExecutionReport, Trade};
 use crate::matching::match_order;
 use crate::order_book::OrderBook;
-use crate::types::{InstrumentId, Order};
+use crate::types::{InstrumentId, Order, OrderId};
 use log::info;
+use rust_decimal::Decimal;
+
+// ---------------------------------------------------------------------------
+// Protocol abstraction (Phase 2): trait used by REST, WebSocket, FIX adapters
+// ---------------------------------------------------------------------------
+
+/// Top-of-book snapshot for market data (e.g. WebSocket snapshot).
+#[derive(Clone, Debug)]
+pub struct BookSnapshot {
+    pub instrument_id: InstrumentId,
+    pub best_bid: Option<Decimal>,
+    pub best_ask: Option<Decimal>,
+}
+
+/// Service interface for the matching engine. All protocol adapters (REST, WebSocket, FIX)
+/// call these operations on the same [`Engine`] instance (see [`crate::api::AppState`]).
+pub trait MatchingEngine {
+    /// Submit an order; returns trades and execution reports.
+    fn submit_order(&mut self, order: Order) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String>;
+
+    /// Cancel a resting order by id. Returns `true` if found and removed.
+    fn cancel_order(&mut self, order_id: OrderId) -> bool;
+
+    /// Modify: cancel by `order_id`, then match the replacement. Returns trades and reports.
+    fn modify_order(
+        &mut self,
+        order_id: OrderId,
+        replacement: &Order,
+    ) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String>;
+
+    /// Instrument this engine handles.
+    fn instrument_id(&self) -> InstrumentId;
+
+    /// Best bid price, if any.
+    fn best_bid(&self) -> Option<Decimal>;
+
+    /// Best ask price, if any.
+    fn best_ask(&self) -> Option<Decimal>;
+
+    /// Current top-of-book snapshot (optional; used by WebSocket market data).
+    fn book_snapshot(&self) -> BookSnapshot {
+        BookSnapshot {
+            instrument_id: self.instrument_id(),
+            best_bid: self.best_bid(),
+            best_ask: self.best_ask(),
+        }
+    }
+}
+
+impl MatchingEngine for Engine {
+    fn submit_order(&mut self, order: Order) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String> {
+        Engine::submit_order(self, order)
+    }
+
+    fn cancel_order(&mut self, order_id: OrderId) -> bool {
+        Engine::cancel_order(self, order_id)
+    }
+
+    fn modify_order(
+        &mut self,
+        order_id: OrderId,
+        replacement: &Order,
+    ) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String> {
+        Engine::modify_order(self, order_id, replacement)
+    }
+
+    fn instrument_id(&self) -> InstrumentId {
+        Engine::instrument_id(self)
+    }
+
+    fn best_bid(&self) -> Option<Decimal> {
+        Engine::best_bid(self)
+    }
+
+    fn best_ask(&self) -> Option<Decimal> {
+        Engine::best_ask(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
 
 /// Single-instrument matching engine.
 ///
