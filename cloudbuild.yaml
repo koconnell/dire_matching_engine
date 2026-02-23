@@ -84,7 +84,7 @@ steps:
   # Step 4: notify Slack on success (only runs if all previous steps passed; skip if _SLACK_WEBHOOK_URL empty)
   - name: curlimages/curl
     id: notify-slack
-    entrypoint: bash
+    entrypoint: sh
     args:
       - -c
       - |
@@ -95,7 +95,7 @@ steps:
         echo "Sending Slack notification..."
         BUILD_LINK="https://console.cloud.google.com/cloud-build/builds;region=${_REGION}/$${BUILD_ID}?project=$${PROJECT_ID}"
         COMMIT_SHORT="$${COMMIT_SHA:-local}"
-        COMMIT_SHORT="$${COMMIT_SHORT:0:7}"
+        COMMIT_SHORT="$$(echo "$$COMMIT_SHORT" | cut -c1-7)"
         payload=$(cat <<SLACKEOF
         {"text":"Build succeeded: dire-matching-engine","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"*Build succeeded* :white_check_mark:\n*Repo:* dire-matching-engine\n*Commit:* \`$$COMMIT_SHORT\`\n*Region:* ${_REGION}\n<$$BUILD_LINK|View in Cloud Build>"}}]}
         SLACKEOF
