@@ -38,6 +38,8 @@
 //! trade/execution IDs yourself.
 
 pub mod api;
+pub mod audit;
+pub mod auth;
 pub mod engine;
 pub mod execution;
 pub mod fix;
@@ -49,4 +51,5 @@ pub use engine::{BookSnapshot, Engine, MatchingEngine};
 pub use execution::{ExecutionReport, Trade};
 pub use matching::match_order;
 pub use order_book::{Fill, OrderBook};
+pub use auth::{AuthConfig, AuthUser, Role};
 pub use types::{ExecType, InstrumentId, Order, OrderId, OrderStatus, OrderType, Side, TimeInForce, TraderId};

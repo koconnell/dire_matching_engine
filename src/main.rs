@@ -32,8 +32,9 @@ async fn main() {
     let fix_addr = format!("0.0.0.0:{}", fix_port);
     let fix_listener = std::net::TcpListener::bind(&fix_addr).expect("FIX bind");
     let engine = state.engine.clone();
+    let market_state = state.market_state.clone();
     std::thread::spawn(move || {
-        fix::run_fix_acceptor(fix_listener, engine, instrument_id);
+        fix::run_fix_acceptor(fix_listener, engine, instrument_id, market_state);
     });
     eprintln!("FIX acceptor on {}", fix_addr);
 
