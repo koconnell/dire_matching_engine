@@ -15,12 +15,16 @@
 #   _GKE_REGION  = cluster region (e.g. us-central1)
 # Leave _GKE_CLUSTER empty to skip deploy (tests + build + push only).
 #
+# Slack: to post build success to a channel, set _SLACK_WEBHOOK_URL in the trigger
+# to your Incoming Webhook URL, or use Secret Manager (see project_docs/slack_notify.md).
+#
 substitutions:
   _REGION: us-central1
   _REPO_NAME: dire-matching-engine
   _IMAGE_TAG: latest
   _GKE_CLUSTER: ""
   _GKE_REGION: us-central1
+  _SLACK_WEBHOOK_URL: ""
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -76,6 +80,34 @@ steps:
           matching-engine=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/dire-matching-engine:${_IMAGE_TAG}
         kubectl rollout status deployment/dire-matching-engine --timeout=300s
         echo "Deployed to GKE cluster ${_GKE_CLUSTER}"
+
+  # Step 4: notify Slack on success (only runs if all previous steps passed; skip if _SLACK_WEBHOOK_URL empty)
+  - name: curlimages/curl
+    id: notify-slack
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ -z "${_SLACK_WEBHOOK_URL}" ]; then
+          echo "Slack webhook not set; skipping notification. (Add _SLACK_WEBHOOK_URL in the trigger to enable.)"
+          exit 0
+        fi
+        echo "Sending Slack notification..."
+        BUILD_LINK="https://console.cloud.google.com/cloud-build/builds;region=${_REGION}/$${BUILD_ID}?project=$${PROJECT_ID}"
+        COMMIT_SHORT="$${COMMIT_SHA:-local}"
+        COMMIT_SHORT="$${COMMIT_SHORT:0:7}"
+        payload=$(cat <<SLACKEOF
+        {"text":"Build succeeded: dire-matching-engine","blocks":[{"type":"section","text":{"type":"mrkdwn","text":"*Build succeeded* :white_check_mark:\n*Repo:* dire-matching-engine\n*Commit:* \`$$COMMIT_SHORT\`\n*Region:* ${_REGION}\n<$$BUILD_LINK|View in Cloud Build>"}}]}
+        SLACKEOF
+        )
+        HTTP_CODE=$$(curl -sS -o /tmp/slack_resp -w "%{http_code}" -X POST -H "Content-Type: application/json" --data "$$payload" "${_SLACK_WEBHOOK_URL}")
+        echo "Slack response HTTP code: $$HTTP_CODE"
+        if [ "$$HTTP_CODE" != "200" ]; then
+          echo "Slack response body:"; cat /tmp/slack_resp 2>/dev/null || true
+          echo "Fix the webhook URL or channel and retry."
+          exit 1
+        fi
+        echo "Slack notification sent."
 
 images:
   - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/dire-matching-engine:${_IMAGE_TAG}
