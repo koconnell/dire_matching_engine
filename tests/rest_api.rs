@@ -498,3 +498,18 @@ async fn admin_config_get_and_patch() {
     let config: serde_json::Value = get1.json().await.unwrap();
     assert_eq!(config.get("max_order_quantity").and_then(|v| v.as_u64()), Some(500));
 }
+
+/// Trader cannot change market state (RBAC: admin/operator only).
+#[tokio::test]
+async fn integration_trader_cannot_set_market_state() {
+    let (addr, _handle) = spawn_app_with_auth(Some("t:trader,a:admin")).await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("http://{}/admin/market-state", addr))
+        .header("Authorization", "Bearer t")
+        .json(&serde_json::json!({ "state": "Halted" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 403);
+}
