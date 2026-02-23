@@ -4,7 +4,10 @@
 //! Uses Extension for state so the router is `Router<()>` and works with `into_make_service()`.
 
 use axum::{
-    extract::Extension,
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Extension,
+    },
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -30,11 +33,50 @@ pub fn create_router(instrument_id: InstrumentId) -> Router<()> {
         .route("/orders", post(submit_order))
         .route("/orders/cancel", post(cancel_order))
         .route("/orders/modify", post(modify_order))
+        .route("/ws/market-data", get(ws_market_data))
         .layer(Extension(state))
 }
 
 async fn health() -> impl IntoResponse {
     (StatusCode::OK, "ok")
+}
+
+/// WebSocket market-data: on connect send one snapshot (best bid/ask), then keep connection open.
+async fn ws_market_data(
+    Extension(state): Extension<AppState>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    upgrade.on_upgrade(move |socket| handle_market_data_socket(state, socket))
+}
+
+#[derive(serde::Serialize)]
+struct MarketDataSnapshot {
+    #[serde(rename = "type")]
+    msg_type: &'static str,
+    instrument_id: u64,
+    best_bid: Option<rust_decimal::Decimal>,
+    best_ask: Option<rust_decimal::Decimal>,
+}
+
+async fn handle_market_data_socket(state: AppState, mut socket: WebSocket) {
+    let snapshot = {
+        let guard = state.engine.lock().expect("lock");
+        MarketDataSnapshot {
+            msg_type: "snapshot",
+            instrument_id: guard.instrument_id().0,
+            best_bid: guard.best_bid(),
+            best_ask: guard.best_ask(),
+        }
+    };
+    let json = match serde_json::to_string(&snapshot) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    if socket.send(Message::Text(json.into())).await.is_err() {
+        return;
+    }
+    // Keep connection open (e.g. for future broadcast); ignore incoming frames
+    while let Some(Ok(_)) = socket.recv().await {}
 }
 
 #[derive(serde::Deserialize)]

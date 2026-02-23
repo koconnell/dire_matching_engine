@@ -28,9 +28,9 @@ Work items for Phase 2 in suggested order. Tick as you complete.
 
 ## 3. WebSocket market data
 
-- [ ] **Endpoint**  
+- [x] **Endpoint**  
   e.g. `WS /ws/market-data`; Axum WebSocket upgrade.
-- [ ] **Snapshot**  
+- [x] **Snapshot**  
   On connect, send current book (best bid/ask or full depth) as JSON.
 - [ ] **Updates (optional)**  
   On trade or book change, broadcast to connected clients (can add in a follow-up slice).
@@ -54,7 +54,7 @@ Work items for Phase 2 in suggested order. Tick as you complete.
 
 - [x] **REST**  
   `tests/rest_api.rs`: spawn server, then test `GET /health`, `POST /orders`, `POST /orders/cancel`, `POST /orders/modify`; assert status and response shape. Run with `cargo test --test rest_api`.
-- [ ] **WebSocket**  
+- [x] **WebSocket**  
   Test connect and receive snapshot (e.g. with `tokio-tungstenite` or similar).
 - [ ] **FIX**  
   If CI-friendly, add test with stub FIX client or document manual QuickFIX verification.
