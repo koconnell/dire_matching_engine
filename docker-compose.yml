@@ -1,0 +1,18 @@
+# Local sandbox: one-command start for certification and integration testing.
+# Usage: docker compose up -d   (then: ./scripts/cert_suite.sh)
+services:
+  engine:
+    build: .
+    image: dire-matching-engine
+    ports:
+      - "8080:8080"
+      - "9876:9876"
+    environment:
+      - PORT=8080
+      - FIX_PORT=9876
+      - DISABLE_AUTH=true
+    # Optional: use API keys instead of DISABLE_AUTH
+    # environment:
+    #   - PORT=8080
+    #   - FIX_PORT=9876
+    #   - API_KEYS=sandbox-trader:trader,sandbox-admin:admin
