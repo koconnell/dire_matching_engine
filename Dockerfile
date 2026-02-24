@@ -5,6 +5,8 @@ WORKDIR /app
 # Cache dependencies (only rebuild when Cargo.toml/Cargo.lock change)
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
+# Bench manifest entries require the bench file to exist; copy so cargo doesn't fail (we only build the bin)
+COPY benches ./benches
 
 # Build release binary (no separate lib copy needed for single crate)
 RUN cargo build --release --bin dire_matching_engine
