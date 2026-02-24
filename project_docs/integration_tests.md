@@ -1,6 +1,6 @@
-# Phase 3 §5 – Integration tests
+# Integration and property-based tests
 
-Integration tests spawn the real server (or FIX acceptor) and call endpoints over the wire. They use explicit auth config and in-memory audit sinks so they do not depend on environment variables and can run in parallel.
+Integration tests spawn the real server (or FIX acceptor) and call endpoints over the wire. They use explicit auth config and in-memory audit sinks so they do not depend on environment variables and can run in parallel. Phase 4 §2 adds property-based and deterministic tests.
 
 ## How to run
 
@@ -16,6 +16,12 @@ cargo test --test ws_market_data
 
 # FIX adapter only
 cargo test --test fix_adapter
+
+# Phase 4 §2: Property-based and deterministic invariants
+cargo test --test proptest_invariants
+
+# Phase 4 §3: Engine performance benchmarks
+cargo bench --bench engine
 ```
 
 ## Test inventory
@@ -65,6 +71,15 @@ cargo test --test fix_adapter
 | `fix_logon_returns_logon` | Send Logon (A) → receive Logon. |
 | `fix_new_order_single_returns_execution_report` | Logon, NewOrderSingle (D) → ExecutionReport (8), OrdStatus New. |
 | `fix_new_order_single_rejected_when_market_halted` | Market state Halted; NewOrderSingle → ExecutionReport with 39=8 (Rejected), 58 contains "market not open". |
+
+### Property-based / deterministic (Phase 4 §2) (`tests/proptest_invariants.rs`)
+
+| Test | Coverage |
+|------|----------|
+| `prop_invariants_hold_after_replay` | Proptest: for any (seed, num_orders) in range, replay GTC-only synthetic stream into engine; assert no negative quantities in trades and reports. (No crossed book checked here; see `matching::tests::invariant_no_crossed_book_after_matching`.) |
+| `deterministic_replay_same_seed_same_outcome` | Same generator config (seed 999, 80 orders) run twice; assert same trade count, report count, and total traded quantity. |
+
+Run: `cargo test --test proptest_invariants`. Default 50 proptest cases; use `PROPTEST_CASES=100` to increase.
 
 ## §5 checklist mapping
 
