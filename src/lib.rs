@@ -48,7 +48,7 @@ pub mod matching;
 pub mod order_book;
 pub mod types;
 
-pub use engine::{BookSnapshot, Engine, MatchingEngine};
+pub use engine::{BookSnapshot, Engine, InstrumentMeta, MatchingEngine, MultiEngine};
 pub use execution::{ExecutionReport, Trade};
 pub use matching::match_order;
 pub use order_book::{Fill, OrderBook};

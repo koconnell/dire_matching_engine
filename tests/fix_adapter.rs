@@ -21,7 +21,7 @@ fn spawn_fix_acceptor_with_state(state: api::AppState) -> (u16, std::thread::Joi
     let engine = state.engine.clone();
     let market_state = state.market_state.clone();
     let handle = std::thread::spawn(move || {
-        run_fix_acceptor(listener, engine, InstrumentId(1), market_state);
+        run_fix_acceptor(listener, engine, market_state);
     });
     std::thread::sleep(Duration::from_millis(50));
     (port, handle)

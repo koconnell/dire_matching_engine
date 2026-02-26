@@ -97,6 +97,7 @@ Optional: set `API_KEYS="key1:trader,key2:admin"` and omit `DISABLE_AUTH` to req
 | Auth details (keys, roles, headers) | [auth_config.md](auth_config.md) |
 | Admin and market state | [admin_api.md](admin_api.md) |
 | Deploy and run (Docker, sandbox, runbook) | [deployment.md](deployment.md) |
+| Manual testing (step-by-step) | [manual_testing.md](manual_testing.md) |
 | REST/WebSocket/FIX test inventory | [integration_tests.md](integration_tests.md) |
 | Certification suite | [certification_suite.md](certification_suite.md) |
 

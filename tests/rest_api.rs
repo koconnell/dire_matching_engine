@@ -80,6 +80,50 @@ async fn submit_order_accepts_limit_order_returns_200() {
     assert!(json.get("reports").and_then(|r| r.as_array()).map(|a| !a.is_empty()).unwrap_or(false));
 }
 
+/// When a buy matches a resting sell, the response must include at least one report with non-null avg_price, last_qty, last_px.
+#[tokio::test]
+async fn submit_sell_then_buy_matching_returns_reports_with_prices() {
+    let (addr, _handle) = spawn_app().await;
+    let url = format!("http://{}/orders", addr);
+    let client = reqwest::Client::new();
+    let sell = serde_json::json!({
+        "order_id": 50,
+        "client_order_id": "c50",
+        "instrument_id": 1,
+        "side": "Sell",
+        "order_type": "Limit",
+        "quantity": "10",
+        "price": "100",
+        "time_in_force": "GTC",
+        "timestamp": 1,
+        "trader_id": 1
+    });
+    client.post(&url).json(&sell).send().await.unwrap();
+    let buy = serde_json::json!({
+        "order_id": 51,
+        "client_order_id": "c51",
+        "instrument_id": 1,
+        "side": "Buy",
+        "order_type": "Limit",
+        "quantity": "5",
+        "price": "100",
+        "time_in_force": "GTC",
+        "timestamp": 2,
+        "trader_id": 2
+    });
+    let response = client.post(&url).json(&buy).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    let json: serde_json::Value = response.json().await.unwrap();
+    let trades = json.get("trades").and_then(|t| t.as_array()).unwrap();
+    assert_eq!(trades.len(), 1, "expected one trade when buy matches sell");
+    let reports = json.get("reports").and_then(|r| r.as_array()).unwrap();
+    let has_price_in_report = reports.iter().any(|r| {
+        r.get("avg_price").map(|v| !v.is_null()).unwrap_or(false)
+            && r.get("last_px").map(|v| !v.is_null()).unwrap_or(false)
+    });
+    assert!(has_price_in_report, "at least one report must have avg_price and last_px set when there is a fill; reports: {:?}", reports);
+}
+
 #[tokio::test]
 async fn submit_order_then_cancel_returns_canceled_true() {
     let (addr, _handle) = spawn_app().await;
@@ -461,6 +505,65 @@ async fn admin_instruments_list_returns_current() {
     let arr = json.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0].get("instrument_id").and_then(|v| v.as_u64()), Some(1));
+}
+
+#[tokio::test]
+async fn admin_instruments_add_list_delete() {
+    let (addr, _handle) = spawn_app_with_auth(Some("a:admin")).await;
+    let client = reqwest::Client::new();
+    let auth = "Bearer a";
+
+    let list0 = client
+        .get(format!("http://{}/admin/instruments", addr))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list0.status(), 200);
+    let arr0: Vec<serde_json::Value> = list0.json().await.unwrap();
+    assert_eq!(arr0.len(), 1);
+
+    let add = client
+        .post(format!("http://{}/admin/instruments", addr))
+        .header("Authorization", auth)
+        .json(&serde_json::json!({ "instrument_id": 2, "symbol": "BAR" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(add.status(), 201);
+
+    let list1 = client
+        .get(format!("http://{}/admin/instruments", addr))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list1.status(), 200);
+    let arr1: Vec<serde_json::Value> = list1.json().await.unwrap();
+    assert_eq!(arr1.len(), 2);
+    let has2 = arr1.iter().any(|o| o.get("instrument_id").and_then(|v| v.as_u64()) == Some(2));
+    assert!(has2, "expected instrument 2 in list: {:?}", arr1);
+    let sym = arr1.iter().find(|o| o.get("instrument_id").and_then(|v| v.as_u64()) == Some(2)).and_then(|o| o.get("symbol"));
+    assert_eq!(sym.and_then(|s| s.as_str()), Some("BAR"));
+
+    let del = client
+        .delete(format!("http://{}/admin/instruments/2", addr))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(del.status(), 204);
+
+    let list2 = client
+        .get(format!("http://{}/admin/instruments", addr))
+        .header("Authorization", auth)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list2.status(), 200);
+    let arr2: Vec<serde_json::Value> = list2.json().await.unwrap();
+    assert_eq!(arr2.len(), 1);
+    assert_eq!(arr2[0].get("instrument_id").and_then(|v| v.as_u64()), Some(1));
 }
 
 #[tokio::test]

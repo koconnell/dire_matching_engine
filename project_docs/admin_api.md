@@ -7,9 +7,9 @@ All admin routes require **Admin** or **Operator** role (403 for Trader). Use `A
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/admin/status` | Health-style status (ok). |
-| GET | `/admin/instruments` | List instruments (single-engine: one entry). |
-| POST | `/admin/instruments` | Add instrument (501 single-instrument engine). |
-| DELETE | `/admin/instruments/:id` | Remove instrument (501 single-instrument engine). |
+| GET | `/admin/instruments` | List instruments. Returns `[{ "instrument_id": number, "symbol": string \| null }, ...]`. |
+| POST | `/admin/instruments` | Add instrument. Body: `{ "instrument_id": number, "symbol": optional string }`. Returns **201** on success; **409** if instrument already exists; **400** for invalid input. |
+| DELETE | `/admin/instruments/:id` | Remove instrument. Returns **204** (no body) on success; **404** if instrument not found; **409** if instrument has resting orders (cancel them first). |
 | GET | `/admin/config` | Get key-value config (JSON object). |
 | PATCH | `/admin/config` | Merge key-value config (body: JSON object). |
 | GET | `/admin/market-state` | Get market state: `Open`, `Halted`, or `Closed`. |

@@ -2,7 +2,7 @@
 //!
 //! Holds the order book and ID counters so Phase 2 (protocol layer) can submit orders
 //! without managing `OrderBook` and `match_order` directly. All protocol adapters (REST,
-//! WebSocket, FIX) use the same entry point: [`Engine`] behind shared state ([`crate::api::AppState`]).
+//! WebSocket, FIX) use the same entry point: [`Engine`] or [`MultiEngine`] behind shared state ([`crate::api::AppState`]).
 
 use crate::execution::{ExecutionReport, Trade};
 use crate::matching::match_order;
@@ -10,6 +10,7 @@ use crate::order_book::OrderBook;
 use crate::types::{InstrumentId, Order, OrderId};
 use log::info;
 use rust_decimal::Decimal;
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Protocol abstraction (Phase 2): trait used by REST, WebSocket, FIX adapters
@@ -24,13 +25,13 @@ pub struct BookSnapshot {
 }
 
 /// Service interface for the matching engine. All protocol adapters (REST, WebSocket, FIX)
-/// call these operations on the same [`Engine`] instance (see [`crate::api::AppState`]).
+/// call these operations on the same engine instance (see [`crate::api::AppState`]).
 pub trait MatchingEngine {
     /// Submit an order; returns trades and execution reports.
     fn submit_order(&mut self, order: Order) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String>;
 
-    /// Cancel a resting order by id. Returns `true` if found and removed.
-    fn cancel_order(&mut self, order_id: OrderId) -> bool;
+    /// Cancel a resting order by id. Returns `Some(instrument_id)` if found and removed (for broadcasting that instrument's update), `None` if not found.
+    fn cancel_order(&mut self, order_id: OrderId) -> Option<InstrumentId>;
 
     /// Modify: cancel by `order_id`, then match the replacement. Returns trades and reports.
     fn modify_order(
@@ -39,22 +40,34 @@ pub trait MatchingEngine {
         replacement: &Order,
     ) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String>;
 
-    /// Instrument this engine handles.
-    fn instrument_id(&self) -> InstrumentId;
+    /// Instrument(s) this engine handles. Single-instrument returns one element; multi-instrument returns all.
+    fn instruments(&self) -> Vec<InstrumentId>;
 
-    /// Best bid price, if any.
-    fn best_bid(&self) -> Option<Decimal>;
+    /// Top-of-book snapshot for a given instrument. Returns `None` if instrument not found.
+    fn book_snapshot_for(&self, id: InstrumentId) -> Option<BookSnapshot>;
 
-    /// Best ask price, if any.
-    fn best_ask(&self) -> Option<Decimal>;
+    /// First instrument (for backward compat). Default: first of `instruments()`.
+    fn instrument_id(&self) -> InstrumentId {
+        self.instruments().into_iter().next().unwrap_or(InstrumentId(0))
+    }
 
-    /// Current top-of-book snapshot (optional; used by WebSocket market data).
+    /// Best bid for the first instrument (backward compat).
+    fn best_bid(&self) -> Option<Decimal> {
+        self.book_snapshot_for(self.instrument_id()).and_then(|s| s.best_bid)
+    }
+
+    /// Best ask for the first instrument (backward compat).
+    fn best_ask(&self) -> Option<Decimal> {
+        self.book_snapshot_for(self.instrument_id()).and_then(|s| s.best_ask)
+    }
+
+    /// Current top-of-book snapshot for the first instrument (backward compat).
     fn book_snapshot(&self) -> BookSnapshot {
-        BookSnapshot {
+        self.book_snapshot_for(self.instrument_id()).unwrap_or(BookSnapshot {
             instrument_id: self.instrument_id(),
-            best_bid: self.best_bid(),
-            best_ask: self.best_ask(),
-        }
+            best_bid: None,
+            best_ask: None,
+        })
     }
 }
 
@@ -63,8 +76,12 @@ impl MatchingEngine for Engine {
         Engine::submit_order(self, order)
     }
 
-    fn cancel_order(&mut self, order_id: OrderId) -> bool {
-        Engine::cancel_order(self, order_id)
+    fn cancel_order(&mut self, order_id: OrderId) -> Option<InstrumentId> {
+        if Engine::cancel_order(self, order_id) {
+            Some(self.instrument_id)
+        } else {
+            None
+        }
     }
 
     fn modify_order(
@@ -75,16 +92,32 @@ impl MatchingEngine for Engine {
         Engine::modify_order(self, order_id, replacement)
     }
 
+    fn instruments(&self) -> Vec<InstrumentId> {
+        vec![self.instrument_id]
+    }
+
+    fn book_snapshot_for(&self, id: InstrumentId) -> Option<BookSnapshot> {
+        if id == self.instrument_id {
+            Some(BookSnapshot {
+                instrument_id: self.instrument_id,
+                best_bid: self.book.best_bid(),
+                best_ask: self.book.best_ask(),
+            })
+        } else {
+            None
+        }
+    }
+
     fn instrument_id(&self) -> InstrumentId {
-        Engine::instrument_id(self)
+        self.instrument_id
     }
 
     fn best_bid(&self) -> Option<Decimal> {
-        Engine::best_bid(self)
+        self.book.best_bid()
     }
 
     fn best_ask(&self) -> Option<Decimal> {
-        Engine::best_ask(self)
+        self.book.best_ask()
     }
 }
 
@@ -240,6 +273,224 @@ impl Engine {
     /// Best ask price, if any.
     pub fn best_ask(&self) -> Option<rust_decimal::Decimal> {
         self.book.best_ask()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-instrument engine: one book per instrument, admin can add/remove
+// ---------------------------------------------------------------------------
+
+/// Metadata for an instrument (optional symbol for display).
+#[derive(Clone, Debug)]
+pub struct InstrumentMeta {
+    pub symbol: Option<String>,
+}
+
+/// Multi-instrument matching engine. Holds one order book per instrument; admin can add/remove instruments.
+/// Order IDs are globally unique; cancel/modify resolve order_id → instrument via an internal map.
+#[derive(Debug)]
+pub struct MultiEngine {
+    books: HashMap<InstrumentId, OrderBook>,
+    registry: HashMap<InstrumentId, InstrumentMeta>,
+    order_to_instrument: HashMap<OrderId, InstrumentId>,
+    next_trade_id: u64,
+    next_exec_id: u64,
+}
+
+impl MultiEngine {
+    /// Creates a multi-instrument engine with the given initial instruments. Each entry is (instrument_id, optional symbol).
+    pub fn new_with_instruments(initial: Vec<(InstrumentId, Option<String>)>) -> Self {
+        let mut books = HashMap::new();
+        let mut registry = HashMap::new();
+        for (id, symbol) in initial {
+            books.insert(id, OrderBook::new(id));
+            registry.insert(id, InstrumentMeta { symbol });
+        }
+        Self {
+            books,
+            registry,
+            order_to_instrument: HashMap::new(),
+            next_trade_id: 1,
+            next_exec_id: 1,
+        }
+    }
+
+    /// Add an instrument (new order book). Returns error if instrument already exists.
+    pub fn add_instrument(&mut self, instrument_id: InstrumentId, symbol: Option<String>) -> Result<(), String> {
+        if self.books.contains_key(&instrument_id) {
+            return Err(format!("Instrument {} already exists", instrument_id.0));
+        }
+        self.books.insert(instrument_id, OrderBook::new(instrument_id));
+        self.registry.insert(instrument_id, InstrumentMeta { symbol });
+        Ok(())
+    }
+
+    /// Remove an instrument. Returns error if the book has resting orders.
+    pub fn remove_instrument(&mut self, instrument_id: InstrumentId) -> Result<(), String> {
+        let book = self.books.get(&instrument_id).ok_or_else(|| format!("Instrument {} not found", instrument_id.0))?;
+        if book.has_resting_orders() {
+            return Err("Instrument has resting orders; cancel them first".to_string());
+        }
+        self.books.remove(&instrument_id);
+        self.registry.remove(&instrument_id);
+        self.order_to_instrument.retain(|_, id| *id != instrument_id);
+        Ok(())
+    }
+
+    /// List instruments with optional symbol (for admin GET).
+    pub fn list_instruments(&self) -> Vec<(InstrumentId, Option<String>)> {
+        self.registry
+            .iter()
+            .map(|(&id, meta)| (id, meta.symbol.clone()))
+            .collect()
+    }
+
+    fn update_order_to_instrument_after_submit(&mut self, order: &Order, reports: &[ExecutionReport]) {
+        let aggressor_report = reports.iter().find(|r| r.order_id == order.order_id);
+        if let Some(r) = aggressor_report {
+            if r.remaining_quantity > Decimal::ZERO {
+                self.order_to_instrument.insert(order.order_id, order.instrument_id);
+            }
+        }
+    }
+
+    fn update_order_to_instrument_after_modify(&mut self, replacement: &Order, reports: &[ExecutionReport]) {
+        let aggressor_report = reports.iter().find(|r| r.order_id == replacement.order_id);
+        if let Some(r) = aggressor_report {
+            if r.remaining_quantity > Decimal::ZERO {
+                self.order_to_instrument.insert(replacement.order_id, replacement.instrument_id);
+            }
+        }
+    }
+}
+
+impl MatchingEngine for MultiEngine {
+    fn submit_order(&mut self, order: Order) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String> {
+        let book = self.books.get_mut(&order.instrument_id).ok_or_else(|| {
+            format!("Unknown instrument {}", order.instrument_id.0)
+        })?;
+        if order.is_limit() && order.price.is_none() {
+            return Err("Limit order must have price".into());
+        }
+        info!(
+            "order submitted order_id={} instrument_id={} side={:?} quantity={} price={:?}",
+            order.order_id.0,
+            order.instrument_id.0,
+            order.side,
+            order.quantity,
+            order.price
+        );
+        let (trades, reports) = match_order(
+            book,
+            &order,
+            self.next_trade_id,
+            self.next_exec_id,
+        );
+        self.next_trade_id += trades.len() as u64;
+        self.next_exec_id += reports.len() as u64;
+        self.update_order_to_instrument_after_submit(&order, &reports);
+        for report in &reports {
+            info!(
+                "execution_report order_id={} exec_type={:?} order_status={:?} filled={} remaining={}",
+                report.order_id.0,
+                report.exec_type,
+                report.order_status,
+                report.filled_quantity,
+                report.remaining_quantity
+            );
+        }
+        for trade in &trades {
+            info!(
+                "trade trade_id={} buy_order={} sell_order={} price={} quantity={}",
+                trade.trade_id.0,
+                trade.buy_order_id.0,
+                trade.sell_order_id.0,
+                trade.price,
+                trade.quantity
+            );
+        }
+        Ok((trades, reports))
+    }
+
+    fn cancel_order(&mut self, order_id: OrderId) -> Option<InstrumentId> {
+        let instrument_id = self.order_to_instrument.remove(&order_id)?;
+        let book = self.books.get_mut(&instrument_id)?;
+        let removed = book.cancel_order(order_id);
+        if removed {
+            info!("order canceled order_id={} instrument_id={}", order_id.0, instrument_id.0);
+            Some(instrument_id)
+        } else {
+            self.order_to_instrument.insert(order_id, instrument_id);
+            None
+        }
+    }
+
+    fn modify_order(
+        &mut self,
+        order_id: OrderId,
+        replacement: &Order,
+    ) -> Result<(Vec<Trade>, Vec<ExecutionReport>), String> {
+        let instrument_id = self.order_to_instrument.remove(&order_id).ok_or_else(|| format!("Order {} not found", order_id.0))?;
+        if replacement.instrument_id != instrument_id {
+            self.order_to_instrument.insert(order_id, instrument_id);
+            return Err("Replacement order must be for the same instrument".into());
+        }
+        let book = self.books.get_mut(&instrument_id).ok_or_else(|| format!("Instrument {} not found", instrument_id.0))?;
+        if !book.cancel_order(order_id) {
+            self.order_to_instrument.insert(order_id, instrument_id);
+            return Err(format!("Order {} not found", order_id.0));
+        }
+        info!(
+            "order modified old_order_id={} replacement order_id={} instrument_id={} side={:?} quantity={} price={:?}",
+            order_id.0,
+            replacement.order_id.0,
+            instrument_id.0,
+            replacement.side,
+            replacement.quantity,
+            replacement.price
+        );
+        let (trades, reports) = match_order(
+            book,
+            replacement,
+            self.next_trade_id,
+            self.next_exec_id,
+        );
+        self.next_trade_id += trades.len() as u64;
+        self.next_exec_id += reports.len() as u64;
+        self.update_order_to_instrument_after_modify(replacement, &reports);
+        for report in &reports {
+            info!(
+                "execution_report order_id={} exec_type={:?} order_status={:?} filled={} remaining={}",
+                report.order_id.0,
+                report.exec_type,
+                report.order_status,
+                report.filled_quantity,
+                report.remaining_quantity
+            );
+        }
+        for trade in &trades {
+            info!(
+                "trade trade_id={} buy_order={} sell_order={} price={} quantity={}",
+                trade.trade_id.0,
+                trade.buy_order_id.0,
+                trade.sell_order_id.0,
+                trade.price,
+                trade.quantity
+            );
+        }
+        Ok((trades, reports))
+    }
+
+    fn instruments(&self) -> Vec<InstrumentId> {
+        self.registry.keys().copied().collect()
+    }
+
+    fn book_snapshot_for(&self, id: InstrumentId) -> Option<BookSnapshot> {
+        self.books.get(&id).map(|book| BookSnapshot {
+            instrument_id: id,
+            best_bid: book.best_bid(),
+            best_ask: book.best_ask(),
+        })
     }
 }
 

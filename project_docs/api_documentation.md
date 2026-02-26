@@ -39,9 +39,9 @@ When **market state** is not **Open**, `POST /orders` and `POST /orders/modify` 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/admin/status` | Status check; returns `{ "status": "ok" }`. |
-| GET | `/admin/instruments` | List instruments (single-engine: one entry). |
-| POST | `/admin/instruments` | Add instrument (501 in single-instrument engine). |
-| DELETE | `/admin/instruments/:id` | Remove instrument (501 in single-instrument engine). |
+| GET | `/admin/instruments` | List instruments. Returns array of `{ "instrument_id": number, "symbol": string \| null }`. |
+| POST | `/admin/instruments` | Add instrument. Body: `{ "instrument_id": number, "symbol": optional string }`. Returns 201; 409 if already exists. |
+| DELETE | `/admin/instruments/:id` | Remove instrument. Returns 204 (no body); 404 if not found; 409 if instrument has resting orders. |
 | GET | `/admin/config` | Get config (JSON object). |
 | PATCH | `/admin/config` | Merge config (body: JSON object). |
 | GET | `/admin/market-state` | Get market state: `Open`, `Halted`, `Closed`. |

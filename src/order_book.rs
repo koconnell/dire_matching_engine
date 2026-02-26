@@ -260,6 +260,11 @@ impl OrderBook {
         self.instrument_id
     }
 
+    /// Returns true if the book has at least one resting order (for admin delete-instrument checks).
+    pub fn has_resting_orders(&self) -> bool {
+        !self.orders.is_empty()
+    }
+
     /// Best bid price (None if empty).
     pub fn best_bid(&self) -> Option<Decimal> {
         self.bids.keys().next_back().copied()

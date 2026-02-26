@@ -5,6 +5,17 @@
 
 use crate::types::{ExecType, ExecutionId, OrderId, OrderStatus};
 use rust_decimal::Decimal;
+use serde::Serializer;
+
+fn serialize_option_decimal<S>(opt: &Option<Decimal>, s: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match opt {
+        None => s.serialize_none(),
+        Some(d) => s.serialize_str(&d.to_string()),
+    }
+}
 
 /// Execution report (charter).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -15,8 +26,11 @@ pub struct ExecutionReport {
     pub order_status: OrderStatus,
     pub filled_quantity: Decimal,
     pub remaining_quantity: Decimal,
+    #[serde(default, serialize_with = "serialize_option_decimal")]
     pub avg_price: Option<Decimal>,
+    #[serde(default, serialize_with = "serialize_option_decimal")]
     pub last_qty: Option<Decimal>,
+    #[serde(default, serialize_with = "serialize_option_decimal")]
     pub last_px: Option<Decimal>,
     pub timestamp: u64,
 }

@@ -15,7 +15,7 @@ use axum::{
     http::StatusCode,
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use std::collections::HashMap;
@@ -24,7 +24,7 @@ use tokio::sync::broadcast;
 
 use crate::audit::{AuditEvent, AuditSink, StdoutAuditSink};
 use crate::auth::{self, AuthConfig, AuthUser};
-use crate::{Engine, InstrumentId, MatchingEngine, Order, OrderId};
+use crate::{InstrumentId, MatchingEngine, MultiEngine, Order, OrderId};
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -65,10 +65,10 @@ pub struct BookUpdate {
     pub best_ask: Option<rust_decimal::Decimal>,
 }
 
-/// Shared app state: one engine per process; broadcast; audit sink; market state and admin config (Phase 3 §4).
+/// Shared app state: multi-instrument engine; broadcast; audit sink; market state and admin config (Phase 3 §4).
 #[derive(Clone)]
 pub struct AppState {
-    pub engine: std::sync::Arc<Mutex<Engine>>,
+    pub engine: std::sync::Arc<Mutex<MultiEngine>>,
     pub(crate) broadcast_tx: broadcast::Sender<BookUpdate>,
     pub(crate) audit_sink: Arc<dyn AuditSink + Send + Sync>,
     /// Market state: when not Open, REST and FIX reject new orders (503 / FIX reject).
@@ -77,16 +77,29 @@ pub struct AppState {
     pub admin_config: Arc<Mutex<HashMap<String, serde_json::Value>>>,
 }
 
-/// Builds shared app state (engine + broadcast + stdout audit + Open market state). Use this when you need to share the engine with FIX or other adapters.
+/// Builds shared app state (multi-instrument engine + broadcast + stdout audit + Open market state). Use this when you need to share the engine with FIX or other adapters.
 pub fn create_app_state(instrument_id: InstrumentId) -> AppState {
-    create_app_state_with_sink(instrument_id, Arc::new(StdoutAuditSink))
+    create_app_state_with_instruments(vec![(instrument_id, None)])
 }
 
-/// Like [`create_app_state`] but with an explicit audit sink (e.g. [`crate::audit::InMemoryAuditSink`] for tests).
+/// Builds shared app state with multiple initial instruments. Each entry is (instrument_id, optional symbol).
+pub fn create_app_state_with_instruments(initial: Vec<(InstrumentId, Option<String>)>) -> AppState {
+    create_app_state_with_sink_and_instruments(initial, Arc::new(StdoutAuditSink))
+}
+
+/// Like [`create_app_state`] but with a single instrument and an explicit audit sink (e.g. [`crate::audit::InMemoryAuditSink`] for tests).
 pub fn create_app_state_with_sink(instrument_id: InstrumentId, audit_sink: Arc<dyn AuditSink + Send + Sync>) -> AppState {
+    create_app_state_with_sink_and_instruments(vec![(instrument_id, None)], audit_sink)
+}
+
+/// Like [`create_app_state_with_instruments`] but with an explicit audit sink.
+pub fn create_app_state_with_sink_and_instruments(
+    initial: Vec<(InstrumentId, Option<String>)>,
+    audit_sink: Arc<dyn AuditSink + Send + Sync>,
+) -> AppState {
     let (broadcast_tx, _) = broadcast::channel(32);
     AppState {
-        engine: std::sync::Arc::new(Mutex::new(Engine::new(instrument_id))),
+        engine: std::sync::Arc::new(Mutex::new(MultiEngine::new_with_instruments(initial))),
         broadcast_tx,
         audit_sink,
         market_state: Arc::new(Mutex::new(MarketState::Open)),
@@ -156,8 +169,18 @@ async fn admin_instruments_list(
         .map_err(|r| r)
         .and_then(|()| {
             let guard = state.engine.lock().expect("lock");
-            let id = guard.instrument_id().0;
-            Ok((StatusCode::OK, Json(serde_json::json!([{ "instrument_id": id }]))).into_response())
+            let list: Vec<serde_json::Value> = guard
+                .list_instruments()
+                .into_iter()
+                .map(|(id, symbol)| {
+                    let mut obj = serde_json::json!({ "instrument_id": id.0 });
+                    if let Some(s) = symbol {
+                        obj["symbol"] = serde_json::Value::String(s);
+                    }
+                    obj
+                })
+                .collect();
+            Ok((StatusCode::OK, Json(list)).into_response())
         })
         .unwrap_or_else(|r| r)
 }
@@ -166,36 +189,55 @@ async fn admin_instruments_list(
 #[allow(dead_code)]
 struct AdminInstrumentsPostBody {
     instrument_id: u64,
+    symbol: Option<String>,
 }
 
 async fn admin_instruments_post(
     Extension(auth): Extension<AuthUser>,
-    Json(_body): Json<AdminInstrumentsPostBody>,
+    Extension(state): Extension<AppState>,
+    Json(body): Json<AdminInstrumentsPostBody>,
 ) -> Response {
     auth::require_admin_or_operator(&auth)
         .map_err(|r| r)
-        .map(|()| {
-            (
-                StatusCode::NOT_IMPLEMENTED,
-                Json(serde_json::json!({ "error": "single-instrument engine: add not implemented" })),
-            )
-                .into_response()
+        .and_then(|()| {
+            let mut guard = state.engine.lock().expect("lock");
+            match guard.add_instrument(InstrumentId(body.instrument_id), body.symbol) {
+                Ok(()) => Ok((StatusCode::CREATED, Json(serde_json::json!({ "instrument_id": body.instrument_id }))).into_response()),
+                Err(e) => {
+                    let status = if e.contains("already exists") {
+                        StatusCode::CONFLICT
+                    } else {
+                        StatusCode::BAD_REQUEST
+                    };
+                    Err((status, Json(serde_json::json!({ "error": e }))).into_response())
+                }
+            }
         })
         .unwrap_or_else(|r| r)
 }
 
 async fn admin_instruments_delete(
     Extension(auth): Extension<AuthUser>,
-    Path(_id): Path<u64>,
+    Extension(state): Extension<AppState>,
+    Path(id): Path<u64>,
 ) -> Response {
     auth::require_admin_or_operator(&auth)
         .map_err(|r| r)
-        .map(|()| {
-            (
-                StatusCode::NOT_IMPLEMENTED,
-                Json(serde_json::json!({ "error": "single-instrument engine: delete not implemented" })),
-            )
-                .into_response()
+        .and_then(|()| {
+            let mut guard = state.engine.lock().expect("lock");
+            match guard.remove_instrument(InstrumentId(id)) {
+                Ok(()) => Ok((StatusCode::NO_CONTENT, ()).into_response()),
+                Err(e) => {
+                    let status = if e.contains("not found") {
+                        StatusCode::NOT_FOUND
+                    } else if e.contains("resting orders") {
+                        StatusCode::CONFLICT
+                    } else {
+                        StatusCode::BAD_REQUEST
+                    };
+                    Err((status, Json(serde_json::json!({ "error": e }))).into_response())
+                }
+            }
         })
         .unwrap_or_else(|r| r)
 }
@@ -328,22 +370,29 @@ struct MarketDataSnapshot {
 }
 
 async fn handle_market_data_socket(state: AppState, mut socket: WebSocket) {
-    let snapshot = {
+    let snapshots: Vec<MarketDataSnapshot> = {
         let guard = state.engine.lock().expect("lock");
-        let book = guard.book_snapshot();
-        MarketDataSnapshot {
-            msg_type: "snapshot",
-            instrument_id: book.instrument_id.0,
-            best_bid: book.best_bid,
-            best_ask: book.best_ask,
+        guard
+            .instruments()
+            .into_iter()
+            .filter_map(|id| {
+                guard.book_snapshot_for(id).map(|book| MarketDataSnapshot {
+                    msg_type: "snapshot",
+                    instrument_id: book.instrument_id.0,
+                    best_bid: book.best_bid,
+                    best_ask: book.best_ask,
+                })
+            })
+            .collect()
+    };
+    for snapshot in snapshots {
+        let json = match serde_json::to_string(&snapshot) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        if socket.send(Message::Text(json.into())).await.is_err() {
+            return;
         }
-    };
-    let json = match serde_json::to_string(&snapshot) {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    if socket.send(Message::Text(json.into())).await.is_err() {
-        return;
     }
 
     let mut rx = state.broadcast_tx.subscribe();
@@ -390,24 +439,28 @@ async fn cancel_order(
     let order_id = body.order_id;
     let mut guard = state.engine.lock().expect("lock");
     let removed = guard.cancel_order(OrderId(order_id));
-    let update = BookUpdate {
-        instrument_id: guard.instrument_id().0,
-        best_bid: guard.best_bid(),
-        best_ask: guard.best_ask(),
-    };
+    let update = removed.and_then(|instrument_id| {
+        guard.book_snapshot_for(instrument_id).map(|s| BookUpdate {
+            instrument_id: s.instrument_id.0,
+            best_bid: s.best_bid,
+            best_ask: s.best_ask,
+        })
+    });
     drop(guard);
-    let _ = state.broadcast_tx.send(update);
+    if let Some(u) = update {
+        let _ = state.broadcast_tx.send(u);
+    }
     state.audit_sink.emit(&AuditEvent::now(
         actor,
         "order_cancel",
         Some(serde_json::json!({ "order_id": order_id })),
-        if removed { "success" } else { "not_found" },
+        if removed.is_some() { "success" } else { "not_found" },
     ));
     #[derive(serde::Serialize)]
     struct Out {
         canceled: bool,
     }
-    (StatusCode::OK, Json(Out { canceled: removed })).into_response()
+    (StatusCode::OK, Json(Out { canceled: removed.is_some() })).into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -433,13 +486,18 @@ async fn modify_order(
     let mut guard = state.engine.lock().expect("lock");
     let out = match guard.modify_order(OrderId(order_id), &body.replacement) {
         Ok((trades, reports)) => {
-            let update = BookUpdate {
-                instrument_id: guard.instrument_id().0,
-                best_bid: guard.best_bid(),
-                best_ask: guard.best_ask(),
-            };
+            let instrument_id = body.replacement.instrument_id;
+            let update = guard
+                .book_snapshot_for(instrument_id)
+                .map(|s| BookUpdate {
+                    instrument_id: s.instrument_id.0,
+                    best_bid: s.best_bid,
+                    best_ask: s.best_ask,
+                });
             drop(guard);
-            let _ = state.broadcast_tx.send(update);
+            if let Some(u) = update {
+                let _ = state.broadcast_tx.send(u);
+            }
             state.audit_sink.emit(&AuditEvent::now(
                 actor.clone(),
                 "order_modify",
@@ -484,21 +542,25 @@ async fn submit_order(
     }
     let actor = auth.key_id.as_deref().unwrap_or("anonymous").to_string();
     let order_id = order.order_id.0;
-    let instrument_id = order.instrument_id.0;
+    let instrument_id = order.instrument_id;
     let mut guard = state.engine.lock().expect("lock");
     match guard.submit_order(order) {
         Ok((trades, reports)) => {
-            let update = BookUpdate {
-                instrument_id: guard.instrument_id().0,
-                best_bid: guard.best_bid(),
-                best_ask: guard.best_ask(),
-            };
+            let update = guard
+                .book_snapshot_for(instrument_id)
+                .map(|s| BookUpdate {
+                    instrument_id: s.instrument_id.0,
+                    best_bid: s.best_bid,
+                    best_ask: s.best_ask,
+                });
             drop(guard);
-            let _ = state.broadcast_tx.send(update);
+            if let Some(u) = update {
+                let _ = state.broadcast_tx.send(u);
+            }
             state.audit_sink.emit(&AuditEvent::now(
                 actor,
                 "order_submit",
-                Some(serde_json::json!({ "order_id": order_id, "instrument_id": instrument_id })),
+                Some(serde_json::json!({ "order_id": order_id, "instrument_id": instrument_id.0 })),
                 "success",
             ));
             #[derive(serde::Serialize)]
@@ -512,7 +574,7 @@ async fn submit_order(
             state.audit_sink.emit(&AuditEvent::now(
                 actor,
                 "order_submit",
-                Some(serde_json::json!({ "order_id": order_id, "instrument_id": instrument_id })),
+                Some(serde_json::json!({ "order_id": order_id, "instrument_id": instrument_id.0 })),
                 "rejected",
             ));
             (

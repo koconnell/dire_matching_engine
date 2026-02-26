@@ -1,12 +1,13 @@
 //! FIX 4.4 TCP acceptor: one listener, one engine; per-connection session with ClOrdID→OrderId mapping.
 
 use crate::api::MarketState;
+use crate::engine::MatchingEngine;
 use crate::fix::message::{
     execution_report_to_fix_with_side, order_from_cancel_replace, order_from_new_order_single,
     parse_fix_message, FixWriter,
 };
 use crate::types::{OrderId, Side};
-use crate::{Engine, InstrumentId};
+use crate::MultiEngine;
 use log::warn;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -17,17 +18,17 @@ const TARGET_COMP_ID: &str = "CLIENT";
 
 /// Run the FIX acceptor on `listener`. Each connection gets a session that shares `engine`.
 /// When `market_state` is not Open, NewOrderSingle and CancelReplaceRequest are rejected (FIX reject).
+/// Orders carry their own instrument_id; the engine may have multiple instruments.
 pub fn run_fix_acceptor(
     listener: std::net::TcpListener,
-    engine: std::sync::Arc<Mutex<Engine>>,
-    instrument_id: InstrumentId,
+    engine: std::sync::Arc<Mutex<MultiEngine>>,
     market_state: std::sync::Arc<Mutex<MarketState>>,
 ) {
     for stream in listener.incoming().flatten() {
         let engine = std::sync::Arc::clone(&engine);
         let market_state = std::sync::Arc::clone(&market_state);
         std::thread::spawn(move || {
-            if let Err(e) = handle_fix_connection(stream, engine, instrument_id, market_state) {
+            if let Err(e) = handle_fix_connection(stream, engine, market_state) {
                 warn!("FIX connection error: {}", e);
             }
         });
@@ -59,8 +60,7 @@ impl Session {
 
 fn handle_fix_connection(
     mut stream: std::net::TcpStream,
-    engine: std::sync::Arc<Mutex<Engine>>,
-    instrument_id: InstrumentId,
+    engine: std::sync::Arc<Mutex<MultiEngine>>,
     market_state: std::sync::Arc<Mutex<MarketState>>,
 ) -> Result<(), String> {
     stream
@@ -104,13 +104,13 @@ fn handle_fix_connection(
                 send_heartbeat(&mut stream, session.next_seq())?;
             }
             "D" => {
-                handle_new_order_single(&mut stream, &msg, &mut session, &engine, instrument_id, &*market_state)?;
+                handle_new_order_single(&mut stream, &msg, &mut session, &engine, &*market_state)?;
             }
             "F" => {
                 handle_order_cancel_request(&mut stream, &msg, &mut session, &engine)?;
             }
             "G" => {
-                handle_order_cancel_replace_request(&mut stream, &msg, &mut session, &engine, instrument_id, &*market_state)?;
+                handle_order_cancel_replace_request(&mut stream, &msg, &mut session, &engine, &*market_state)?;
             }
             _ => {
                 warn!("FIX unknown MsgType: {}", msg_type);
@@ -190,8 +190,7 @@ fn handle_new_order_single(
     stream: &mut std::net::TcpStream,
     fix: &crate::fix::message::FixMessage,
     session: &mut Session,
-    engine: &std::sync::Arc<Mutex<Engine>>,
-    instrument_id: InstrumentId,
+    engine: &std::sync::Arc<Mutex<MultiEngine>>,
     market_state: &std::sync::Mutex<MarketState>,
 ) -> Result<(), String> {
     if *market_state.lock().expect("lock") != MarketState::Open {
@@ -202,10 +201,6 @@ fn handle_new_order_single(
     let order = order_from_new_order_single(fix)?;
     let cl_ord_id = order.client_order_id.clone();
     let side = order.side;
-    if order.instrument_id != instrument_id {
-        send_rejection(stream, &cl_ord_id, "wrong instrument", session.next_seq())?;
-        return Ok(());
-    }
     session.cl_ord_to_order_id.insert(cl_ord_id.clone(), order.order_id);
     session.cl_ord_to_side.insert(cl_ord_id.clone(), side);
 
@@ -227,7 +222,7 @@ fn handle_new_order_single(
         }
         Err(e) => {
             drop(guard);
-            send_rejection(stream, &cl_ord_id, &e, session.next_seq())?;
+            send_rejection(stream, &cl_ord_id, e.as_str(), session.next_seq())?;
         }
     }
     Ok(())
@@ -266,7 +261,7 @@ fn handle_order_cancel_request(
     stream: &mut std::net::TcpStream,
     fix: &crate::fix::message::FixMessage,
     session: &mut Session,
-    engine: &std::sync::Arc<Mutex<Engine>>,
+    engine: &std::sync::Arc<Mutex<MultiEngine>>,
 ) -> Result<(), String> {
     let orig_cl_ord_id = fix.get(&41).ok_or_else(|| "missing OrigClOrdID (41)".to_string())?.clone();
     let order_id = *session.cl_ord_to_order_id.get(&orig_cl_ord_id).ok_or_else(|| "OrigClOrdID not found".to_string())?;
@@ -274,7 +269,7 @@ fn handle_order_cancel_request(
     let mut guard = engine.lock().expect("lock");
     let removed = guard.cancel_order(order_id);
     drop(guard);
-    if !removed {
+    if removed.is_none() {
         send_rejection(stream, &orig_cl_ord_id, "order not found", session.next_seq())?;
         return Ok(());
     }
@@ -304,8 +299,7 @@ fn handle_order_cancel_replace_request(
     stream: &mut std::net::TcpStream,
     fix: &crate::fix::message::FixMessage,
     session: &mut Session,
-    engine: &std::sync::Arc<Mutex<Engine>>,
-    _instrument_id: InstrumentId,
+    engine: &std::sync::Arc<Mutex<MultiEngine>>,
     market_state: &std::sync::Mutex<MarketState>,
 ) -> Result<(), String> {
     if *market_state.lock().expect("lock") != MarketState::Open {
@@ -341,7 +335,7 @@ fn handle_order_cancel_replace_request(
         }
         Err(e) => {
             drop(guard);
-            send_rejection(stream, &cl_ord_id, &e, session.next_seq())?;
+            send_rejection(stream, &cl_ord_id, e.as_str(), session.next_seq())?;
         }
     }
     Ok(())

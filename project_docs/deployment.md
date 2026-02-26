@@ -178,6 +178,7 @@ For a single `docker run` container, stop it with `docker stop <container_id>` o
 
 | Topic | Document |
 |-------|----------|
+| Manual testing (step-by-step with curl) | [manual_testing.md](manual_testing.md) |
 | API keys and roles | [auth_config.md](auth_config.md) |
 | Certification suite (details) | [certification_suite.md](certification_suite.md) |
 | Onboarding and first calls | [onboarding.md](onboarding.md) |
