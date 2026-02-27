@@ -6,6 +6,7 @@
 //! Startup: use INSTRUMENT_ID (single u64, default 1) for one instrument, or INSTRUMENT_IDS
 //! for multiple (e.g. "1,2,3" or "1:AAPL,2:GOOG" for id:symbol). When INSTRUMENT_IDS is set
 //! it takes precedence over INSTRUMENT_ID.
+//! Set PERSISTENCE_PATH to a file path to save/load state (instruments, resting orders, market state) across restarts.
 
 use dire_matching_engine::api;
 use dire_matching_engine::fix;
@@ -56,7 +57,10 @@ async fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(9876);
 
-    let state = if instruments.len() == 1 && instruments[0].1.is_none() {
+    let state = if let Ok(path) = std::env::var("PERSISTENCE_PATH") {
+        eprintln!("Persistence enabled: {}", path);
+        api::create_app_state_with_persistence(instruments, path)
+    } else if instruments.len() == 1 && instruments[0].1.is_none() {
         api::create_app_state(instruments[0].0)
     } else {
         api::create_app_state_with_instruments(instruments)

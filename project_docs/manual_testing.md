@@ -293,7 +293,7 @@ curl -s http://localhost:8080/admin/config -H "Authorization: Bearer admin-key"
 curl -s http://localhost:8080/admin/instruments -H "Authorization: Bearer admin-key"
 ```
 
-**Expected:** `[{"instrument_id":1}]` (single-instrument engine)
+**Expected:** Array of instruments, e.g. `[{"instrument_id":1}]` (default one instrument) or more if you added instruments via POST or started with `INSTRUMENT_IDS`.
 
 **10. RBAC: trader cannot call admin** (should get 403):
 

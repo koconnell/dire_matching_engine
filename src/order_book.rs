@@ -3,7 +3,7 @@
 //! Supports add, cancel, modify, and taking liquidity (used by [`crate::matching`]).
 //! Each price level is FIFO; best bid is highest price, best ask is lowest.
 
-use crate::types::{Order, OrderId, Side, TraderId};
+use crate::types::{Order, OrderId, OrderType, RestingOrder, Side, TimeInForce, TraderId};
 use rust_decimal::Decimal;
 use std::collections::{BTreeMap, HashMap};
 
@@ -263,6 +263,67 @@ impl OrderBook {
     /// Returns true if the book has at least one resting order (for admin delete-instrument checks).
     pub fn has_resting_orders(&self) -> bool {
         !self.orders.is_empty()
+    }
+
+    /// Export resting orders for persistence. Caller must set instrument_id on each (use `instrument_id()`).
+    pub fn resting_orders_snapshot(&self) -> Vec<RestingOrder> {
+        let mut out = Vec::new();
+        for (price, queue) in &self.bids {
+            for (order_id, qty, trader_id) in queue {
+                out.push(RestingOrder {
+                    order_id: *order_id,
+                    instrument_id: self.instrument_id,
+                    side: Side::Buy,
+                    price: *price,
+                    quantity: *qty,
+                    trader_id: *trader_id,
+                });
+            }
+        }
+        for (price, queue) in &self.asks {
+            for (order_id, qty, trader_id) in queue {
+                out.push(RestingOrder {
+                    order_id: *order_id,
+                    instrument_id: self.instrument_id,
+                    side: Side::Sell,
+                    price: *price,
+                    quantity: *qty,
+                    trader_id: *trader_id,
+                });
+            }
+        }
+        out
+    }
+
+    /// Restore resting orders (e.g. after load from persistence). Clears the book first. Each order must be for this book's instrument.
+    pub fn load_resting_orders(
+        &mut self,
+        orders: &[RestingOrder],
+        order_type: OrderType,
+        time_in_force: TimeInForce,
+    ) -> Result<(), String> {
+        self.bids.clear();
+        self.asks.clear();
+        self.orders.clear();
+        for r in orders {
+            if r.instrument_id != self.instrument_id {
+                return Err(format!("Resting order instrument {} does not match book {}", r.instrument_id.0, self.instrument_id.0));
+            }
+            let order = Order {
+                order_id: r.order_id,
+                client_order_id: format!("restore-{}", r.order_id.0),
+                instrument_id: r.instrument_id,
+                side: r.side,
+                order_type,
+                quantity: r.quantity,
+                price: Some(r.price),
+                time_in_force,
+                timestamp: 0,
+                trader_id: r.trader_id,
+            };
+            self.add_order(&order)?;
+        }
+        Ok(())
     }
 
     /// Best bid price (None if empty).

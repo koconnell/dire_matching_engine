@@ -45,7 +45,7 @@ Full details: [API key authentication](auth_config.md).
    `GET http://<sandbox>/health` → `200 OK` and body `ok`.
 
 2. **Submit order (with key):**  
-   `POST http://<sandbox>/orders` with `Authorization: Bearer <your-key>` and JSON body (order fields: `order_id`, `client_order_id`, `instrument_id`, `side`, `order_type`, `quantity`, `price` for limit, `time_in_force`, `timestamp`, `trader_id`).  
+   `POST http://<sandbox>/orders` with `Authorization: Bearer <your-key>` and JSON body (order fields: `order_id`, `client_order_id`, `instrument_id`, `side`, `order_type`, `quantity`, `price` for limit, `time_in_force`, `timestamp`, `trader_id`). Use a **stable** `trader_id` per trader so that all orders from the same trader use the same id (required for self-trade prevention and reporting).  
    See [Integration tests](integration_tests.md) for example payloads.
 
 3. **Admin (admin/operator key):**  

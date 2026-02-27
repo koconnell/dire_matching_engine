@@ -69,7 +69,7 @@ Full admin behavior: [admin_api.md](admin_api.md).
 | `price` | string, number, or null | For Limit only | Limit price; required for `"Limit"`, omit/null for `"Market"`. |
 | `time_in_force` | string | Yes | `"GTC"`, `"IOC"`, or `"FOK"`. |
 | `timestamp` | number | Yes | Client timestamp. |
-| `trader_id` | number | Yes | Trader identifier. |
+| `trader_id` | number | Yes | Trader identifier. **Must be stable per trader:** the exchange must use the same `trader_id` for every order from the same trader so that self-trade prevention and execution reports are correct. |
 
 **Response (200):**
 
@@ -155,13 +155,13 @@ or `{ "canceled": false }` if the order was not found or already canceled.
 
 ### Message format
 
-All server messages are **JSON** with a `type` field.
+All server messages are **JSON** with a `msg_type` field.
 
 **Snapshot (on connect and on each book change):**
 
 ```json
 {
-  "type": "snapshot",
+  "msg_type": "snapshot",
   "instrument_id": 1,
   "best_bid": "100.50",
   "best_ask": "101.00"
@@ -169,7 +169,7 @@ All server messages are **JSON** with a `type` field.
 ```
 
 - `best_bid` / `best_ask` are decimal strings (or `null` if no bid/ask).  
-- On connect the server sends one snapshot (current book). Then it sends a snapshot whenever the book changes (e.g. after order submit/cancel/modify).  
+- On connect the server sends **one snapshot per instrument** (current book for each). Then it sends a snapshot whenever a book changes (e.g. after order submit/cancel/modify).  
 - Client messages are not required; the server may ignore them.
 
 ---

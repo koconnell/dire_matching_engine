@@ -46,12 +46,13 @@ pub mod execution;
 pub mod fix;
 pub mod matching;
 pub mod order_book;
+pub mod persistence;
 pub mod types;
 
-pub use engine::{BookSnapshot, Engine, InstrumentMeta, MatchingEngine, MultiEngine};
+pub use engine::{BookSnapshot, Engine, EngineSnapshot, InstrumentMeta, MatchingEngine, MultiEngine};
 pub use execution::{ExecutionReport, Trade};
 pub use matching::match_order;
 pub use order_book::{Fill, OrderBook};
 pub use auth::{AuthConfig, AuthUser, Role};
-pub use types::{ExecType, InstrumentId, Order, OrderId, OrderStatus, OrderType, Side, TimeInForce, TraderId};
+pub use types::{ExecType, InstrumentId, Order, OrderId, OrderStatus, OrderType, RestingOrder, Side, TimeInForce, TraderId};
 pub use market_data_gen::{replay_into_engine, replay_into_engine_with_delay, Generator, GeneratorConfig};

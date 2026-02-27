@@ -7,7 +7,7 @@
 use crate::execution::{ExecutionReport, Trade};
 use crate::matching::match_order;
 use crate::order_book::OrderBook;
-use crate::types::{InstrumentId, Order, OrderId};
+use crate::types::{InstrumentId, Order, OrderId, RestingOrder};
 use log::info;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -280,6 +280,17 @@ impl Engine {
 // Multi-instrument engine: one book per instrument, admin can add/remove
 // ---------------------------------------------------------------------------
 
+/// Serializable snapshot of MultiEngine state for persistence.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct EngineSnapshot {
+    pub instruments: Vec<(InstrumentId, Option<String>)>,
+    /// Per-instrument resting orders.
+    pub books: Vec<(InstrumentId, Vec<RestingOrder>)>,
+    pub order_to_instrument: Vec<(OrderId, InstrumentId)>,
+    pub next_trade_id: u64,
+    pub next_exec_id: u64,
+}
+
 /// Metadata for an instrument (optional symbol for display).
 #[derive(Clone, Debug)]
 pub struct InstrumentMeta {
@@ -334,6 +345,54 @@ impl MultiEngine {
         self.books.remove(&instrument_id);
         self.registry.remove(&instrument_id);
         self.order_to_instrument.retain(|_, id| *id != instrument_id);
+        Ok(())
+    }
+
+    /// Snapshot of engine state for persistence. Serialize to JSON and restore with [`load_from_snapshot`].
+    pub fn snapshot(&self) -> EngineSnapshot {
+        let instruments: Vec<(InstrumentId, Option<String>)> = self
+            .registry
+            .iter()
+            .map(|(&id, meta)| (id, meta.symbol.clone()))
+            .collect();
+        let books: Vec<(InstrumentId, Vec<RestingOrder>)> = self
+            .books
+            .iter()
+            .map(|(&id, book)| (id, book.resting_orders_snapshot()))
+            .collect();
+        let order_to_instrument: Vec<(OrderId, InstrumentId)> = self
+            .order_to_instrument
+            .iter()
+            .map(|(&oid, &iid)| (oid, iid))
+            .collect();
+        EngineSnapshot {
+            instruments,
+            books,
+            order_to_instrument,
+            next_trade_id: self.next_trade_id,
+            next_exec_id: self.next_exec_id,
+        }
+    }
+
+    /// Restore engine from a snapshot (e.g. after loading from persistence). Replaces current state.
+    pub fn load_from_snapshot(&mut self, snap: EngineSnapshot) -> Result<(), String> {
+        use crate::types::{OrderType, TimeInForce};
+        self.books.clear();
+        self.registry.clear();
+        self.order_to_instrument.clear();
+        for (id, symbol) in &snap.instruments {
+            self.books.insert(*id, OrderBook::new(*id));
+            self.registry.insert(*id, InstrumentMeta { symbol: symbol.clone() });
+        }
+        for (instrument_id, resting) in &snap.books {
+            let book = self.books.get_mut(instrument_id).ok_or_else(|| format!("Instrument {} not in snapshot instruments", instrument_id.0))?;
+            book.load_resting_orders(resting, OrderType::Limit, TimeInForce::GTC)?;
+            for r in resting {
+                self.order_to_instrument.insert(r.order_id, *instrument_id);
+            }
+        }
+        self.next_trade_id = snap.next_trade_id;
+        self.next_exec_id = snap.next_exec_id;
         Ok(())
     }
 

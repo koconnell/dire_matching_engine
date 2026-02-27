@@ -24,6 +24,7 @@ use tokio::sync::broadcast;
 
 use crate::audit::{AuditEvent, AuditSink, StdoutAuditSink};
 use crate::auth::{self, AuthConfig, AuthUser};
+use crate::persistence::{FilePersistence, PersistedState};
 use crate::{InstrumentId, MatchingEngine, MultiEngine, Order, OrderId};
 use std::sync::Arc;
 
@@ -75,6 +76,8 @@ pub struct AppState {
     pub market_state: Arc<Mutex<MarketState>>,
     /// Admin config key-value store (US-009). Keys are strings; values are JSON.
     pub admin_config: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    /// When set, state is saved to file after each change and loaded on startup.
+    pub(crate) persistence: Option<Arc<FilePersistence>>,
 }
 
 /// Builds shared app state (multi-instrument engine + broadcast + stdout audit + Open market state). Use this when you need to share the engine with FIX or other adapters.
@@ -84,27 +87,78 @@ pub fn create_app_state(instrument_id: InstrumentId) -> AppState {
 
 /// Builds shared app state with multiple initial instruments. Each entry is (instrument_id, optional symbol).
 pub fn create_app_state_with_instruments(initial: Vec<(InstrumentId, Option<String>)>) -> AppState {
-    create_app_state_with_sink_and_instruments(initial, Arc::new(StdoutAuditSink))
+    create_app_state_with_sink_and_instruments(initial, Arc::new(StdoutAuditSink), None)
 }
 
 /// Like [`create_app_state`] but with a single instrument and an explicit audit sink (e.g. [`crate::audit::InMemoryAuditSink`] for tests).
 pub fn create_app_state_with_sink(instrument_id: InstrumentId, audit_sink: Arc<dyn AuditSink + Send + Sync>) -> AppState {
-    create_app_state_with_sink_and_instruments(vec![(instrument_id, None)], audit_sink)
+    create_app_state_with_sink_and_instruments(vec![(instrument_id, None)], audit_sink, None)
 }
 
-/// Like [`create_app_state_with_instruments`] but with an explicit audit sink.
+/// Like [`create_app_state_with_instruments`] but with an explicit audit sink. When `persistence` is `Some`, state is loaded from file if present and saved after each change.
 pub fn create_app_state_with_sink_and_instruments(
     initial: Vec<(InstrumentId, Option<String>)>,
     audit_sink: Arc<dyn AuditSink + Send + Sync>,
+    persistence: Option<Arc<FilePersistence>>,
 ) -> AppState {
     let (broadcast_tx, _) = broadcast::channel(32);
+    let (engine, market_state) = if let Some(ref p) = persistence {
+        match p.load() {
+            Ok(Some(loaded)) => {
+                let mut eng = MultiEngine::new_with_instruments(vec![]);
+                if let Err(e) = eng.load_from_snapshot(loaded.engine) {
+                    log::warn!("Failed to load persistence snapshot: {}; starting fresh", e);
+                }
+                let ms = MarketState::from_str(loaded.market_state.trim()).unwrap_or(MarketState::Open);
+                (Arc::new(Mutex::new(eng)), Arc::new(Mutex::new(ms)))
+            }
+            Ok(None) | Err(_) => (
+                Arc::new(Mutex::new(MultiEngine::new_with_instruments(initial))),
+                Arc::new(Mutex::new(MarketState::Open)),
+            ),
+        }
+    } else {
+        (
+            Arc::new(Mutex::new(MultiEngine::new_with_instruments(initial))),
+            Arc::new(Mutex::new(MarketState::Open)),
+        )
+    };
     AppState {
-        engine: std::sync::Arc::new(Mutex::new(MultiEngine::new_with_instruments(initial))),
+        engine,
         broadcast_tx,
         audit_sink,
-        market_state: Arc::new(Mutex::new(MarketState::Open)),
+        market_state,
         admin_config: Arc::new(Mutex::new(HashMap::new())),
+        persistence,
     }
+}
+
+fn persist_state(state: &AppState) {
+    let Some(ref p) = state.persistence else { return };
+    let engine_snapshot = {
+        let guard = state.engine.lock().expect("lock");
+        guard.snapshot()
+    };
+    let market_state_str = {
+        let guard = state.market_state.lock().expect("lock");
+        guard.as_str().to_string()
+    };
+    let persisted = PersistedState {
+        engine: engine_snapshot,
+        market_state: market_state_str,
+    };
+    if let Err(e) = p.save(&persisted) {
+        log::warn!("Persistence save failed: {}", e);
+    }
+}
+
+/// Builds app state with file persistence. When `path` is set, state is loaded from the file on startup (if it exists) and saved after each state change.
+pub fn create_app_state_with_persistence(
+    initial: Vec<(InstrumentId, Option<String>)>,
+    path: impl AsRef<std::path::Path>,
+) -> AppState {
+    let persistence = Arc::new(FilePersistence::new(path));
+    create_app_state_with_sink_and_instruments(initial, Arc::new(StdoutAuditSink), Some(persistence))
 }
 
 /// Builds the REST/WebSocket router with the given state. Use with [`create_app_state`] when sharing engine with FIX.
@@ -202,7 +256,11 @@ async fn admin_instruments_post(
         .and_then(|()| {
             let mut guard = state.engine.lock().expect("lock");
             match guard.add_instrument(InstrumentId(body.instrument_id), body.symbol) {
-                Ok(()) => Ok((StatusCode::CREATED, Json(serde_json::json!({ "instrument_id": body.instrument_id }))).into_response()),
+                Ok(()) => {
+                    drop(guard);
+                    persist_state(&state);
+                    Ok((StatusCode::CREATED, Json(serde_json::json!({ "instrument_id": body.instrument_id }))).into_response())
+                }
                 Err(e) => {
                     let status = if e.contains("already exists") {
                         StatusCode::CONFLICT
@@ -226,7 +284,11 @@ async fn admin_instruments_delete(
         .and_then(|()| {
             let mut guard = state.engine.lock().expect("lock");
             match guard.remove_instrument(InstrumentId(id)) {
-                Ok(()) => Ok((StatusCode::NO_CONTENT, ()).into_response()),
+                Ok(()) => {
+                    drop(guard);
+                    persist_state(&state);
+                    Ok((StatusCode::NO_CONTENT, ()).into_response())
+                }
                 Err(e) => {
                     let status = if e.contains("not found") {
                         StatusCode::NOT_FOUND
@@ -323,6 +385,7 @@ async fn admin_market_state_post(
                 Some(serde_json::json!({ "state": new_state.as_str() })),
                 "success",
             ));
+            persist_state(&state);
             Ok((StatusCode::OK, Json(serde_json::json!({ "state": new_state.as_str() }))).into_response())
         })
         .unwrap_or_else(|r| r)
@@ -343,6 +406,7 @@ async fn admin_emergency_halt(
                 Some(serde_json::json!({ "state": "Halted" })),
                 "success",
             ));
+            persist_state(&state);
             Ok((
                 StatusCode::OK,
                 Json(serde_json::json!({ "state": "Halted", "message": "emergency halt applied" })),
@@ -456,6 +520,9 @@ async fn cancel_order(
         Some(serde_json::json!({ "order_id": order_id })),
         if removed.is_some() { "success" } else { "not_found" },
     ));
+    if removed.is_some() {
+        persist_state(&state);
+    }
     #[derive(serde::Serialize)]
     struct Out {
         canceled: bool,
@@ -504,6 +571,7 @@ async fn modify_order(
                 Some(serde_json::json!({ "order_id": order_id, "replacement_order_id": body.replacement.order_id.0 })),
                 "success",
             ));
+            persist_state(&state);
             #[derive(serde::Serialize)]
             struct Out {
                 trades: Vec<crate::Trade>,
@@ -563,6 +631,7 @@ async fn submit_order(
                 Some(serde_json::json!({ "order_id": order_id, "instrument_id": instrument_id.0 })),
                 "success",
             ));
+            persist_state(&state);
             #[derive(serde::Serialize)]
             struct Out {
                 trades: Vec<crate::Trade>,

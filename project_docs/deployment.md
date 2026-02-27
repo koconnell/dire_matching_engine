@@ -76,7 +76,9 @@ This starts the engine with REST on port 8080 and FIX on 9876. Use `http://local
 |----------|---------|---------|--------|
 | `PORT` | HTTP (REST + WebSocket) listen port | `8080` | Set in Dockerfile; override with `-e PORT=...` |
 | `FIX_PORT` | FIX TCP listen port | `9876` | Not in Dockerfile; pass `-e FIX_PORT=9876` and `-p 9876:9876` |
-| `INSTRUMENT_ID` | Instrument ID for the single-instrument engine | `1` | Optional |
+| `INSTRUMENT_ID` | Single instrument at startup (used when `INSTRUMENT_IDS` is not set) | `1` | Optional |
+| `INSTRUMENT_IDS` | Comma-separated instrument list for multi-instrument (e.g. `1,2,3` or `1:AAPL,2:GOOG`). When set, overrides `INSTRUMENT_ID`. | (unset) | Optional |
+| `PERSISTENCE_PATH` | File path for state persistence. When set, the engine loads state from this file on startup (if it exists) and saves after each state change (orders, cancels, modifies, instrument add/delete, market state, emergency halt). State includes instruments, resting orders, and market state (Open/Halted). | (unset) | Optional; mount a volume and set path inside container |
 | `API_KEYS` | Comma-separated `key:role` (e.g. `k1:trader,k2:admin`). Roles: `trader`, `admin`, `operator`. | (unset = auth disabled) | Set for production-like auth |
 | `DISABLE_AUTH` | If `true` or `1`, ignore `API_KEYS` and accept all requests (default role). | (unset) | Use for local/sandbox without keys |
 | `RUST_LOG` | Log level (e.g. `info`, `debug`). Optional. | (none) | Optional |
@@ -91,7 +93,7 @@ See [auth_config.md](auth_config.md) for auth details.
 - **Non-root:** The Docker image runs as user `app` (UID 1000).
 - **Ports:** Publish both `8080` (REST/WebSocket) and `9876` (FIX) when deploying.
 - **Auth:** In production, set `API_KEYS` and do **not** set `DISABLE_AUTH`. Issue keys and roles per client.
-- **State:** The engine is in-memory only; restart clears orders and book. Persistence (if needed) is out of scope for this release.
+- **State:** By default the engine is in-memory only; restart clears orders and book. Set `PERSISTENCE_PATH` to a file path to persist instruments, resting orders, and market state across restarts (saved after each state change).
 - **TLS:** The server does not terminate TLS. Run behind a reverse proxy (e.g. nginx, Caddy) or a cloud load balancer for HTTPS.
 - **Resource limits:** Use `docker run --memory=...` or orchestrator limits as appropriate for your load.
 
@@ -179,6 +181,7 @@ For a single `docker run` container, stop it with `docker stop <container_id>` o
 | Topic | Document |
 |-------|----------|
 | Manual testing (step-by-step with curl) | [manual_testing.md](manual_testing.md) |
+| Packaging for your exchange (versioning, Docker, crates.io) | [packaging_for_exchange.md](packaging_for_exchange.md) |
 | API keys and roles | [auth_config.md](auth_config.md) |
 | Certification suite (details) | [certification_suite.md](certification_suite.md) |
 | Onboarding and first calls | [onboarding.md](onboarding.md) |

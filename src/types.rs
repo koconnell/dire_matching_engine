@@ -96,3 +96,14 @@ impl Order {
         matches!(self.order_type, OrderType::Market)
     }
 }
+
+/// Minimal representation of a resting order for persistence/snapshot.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RestingOrder {
+    pub order_id: OrderId,
+    pub instrument_id: InstrumentId,
+    pub side: Side,
+    pub price: Decimal,
+    pub quantity: Decimal,
+    pub trader_id: TraderId,
+}
